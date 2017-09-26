@@ -1,14 +1,14 @@
 
 /*
- * EOSEncodeWing - This program implements a simple encoder wing for ETC/EOS 
- *                 using OSC for the Teensy 3.6 platform
- *                 
- * Author: Matt Campbell
- * Date:   9/26/2017
- * 
- * Revision 1
- * 
- */
+   EOSEncodeWing - This program implements a simple encoder wing for ETC/EOS
+                   using OSC for the Teensy 3.6 platform
+
+   Author: Matt Campbell
+   Date:   9/26/2017
+
+   Revision 1
+
+*/
 #include <OSCBoards.h>
 #include <OSCBundle.h>
 #include <OSCData.h>
@@ -29,6 +29,14 @@
 #define SELECTPIN 0
 #define UPPIN     1
 #define DOWNPIN   2
+#define M1PIN     3
+#define M2PIN     4
+#define M3PIN     5
+
+#define W1PIN     6
+#define W2PIN     7
+#define W3PIN     8
+#define W4PIN     9
 #define SUPPORTEDWHEELS 50
 #define NUMWHEELS 4
 #define NSIZE     80
@@ -52,6 +60,7 @@ char fileName[12];
 int line = 0;
 boolean forceUpdate = false;
 boolean updatePageConfig = false;
+float wheelClickSpeed[NUMWHEELS];
 
 SLIPEncodedUSBSerial SLIPSerial(thisBoardsSerialUSB);
 Adafruit_SSD1306 *disp[NUMWHEELS];
@@ -83,14 +92,18 @@ void setup()
   pinMode(SELECTPIN, INPUT_PULLUP);
   pinMode(UPPIN,     INPUT_PULLUP);
   pinMode(DOWNPIN,   INPUT_PULLUP);
+  pinMode(W1PIN,     INPUT_PULLUP);
+  pinMode(W2PIN,     INPUT_PULLUP);
+  pinMode(W3PIN,     INPUT_PULLUP);
+  pinMode(W4PIN,     INPUT_PULLUP);
 
 
   for (int i = 0; i < NUMWHEELS; i++) {
     pages[currentPage].activeWheels[i].name[0] = '\0';
     allWheelNames[i][0] = '\0';
-
     wheelPos[i] = -999;
     displayInit(i);
+    wheelClickSpeed[i] = 1.0;
   }
   wheels[0] = new Encoder(32, 31);
   wheels[1] = new Encoder(30, 29);
@@ -268,7 +281,7 @@ void printMessage(int i, char *msg) {
 
 void printWheelValue(int i, int value) {
   int length = 0;
-  disp[i]->fillRect(0, 0, disp[i]->width(), disp[i]->height() - 16, 0);
+  disp[i]->fillRect(0, 0, disp[i]->width() - 10, disp[i]->height() - 16, 0);
   if (value < -99) {
     length = NSIZE;
   } else if (value >= 0 && value < 10) {
@@ -281,6 +294,13 @@ void printWheelValue(int i, int value) {
   disp[i]->setCursor(disp[i]->width() / 2 - length / 2, 0);
   disp[i]->setTextSize(4);
   disp[i]->print(value);
+  disp[i]->display();
+}
+void printWheelClickSpeed(int i) {
+  disp[i]->fillRect(disp[i]->width() - 10, 0, disp[i]->width() - 10, disp[i]->height() - 16, 0);
+  disp[i]->setCursor(disp[i]->width() - 10, 0);
+  disp[i]->setTextSize(1);
+  disp[i]->print((int)wheelClickSpeed[i]);
   disp[i]->display();
 }
 
@@ -303,6 +323,30 @@ void loop()
   static int i;
   int size;
 
+  if (!digitalRead(W1PIN)) {
+    wheelClickSpeed[0]++;
+    if (wheelClickSpeed[0] > 5) wheelClickSpeed[0] = 1;
+    printWheelClickSpeed(0);
+    delay(200);
+  }
+  if (!digitalRead(W2PIN)) {
+    wheelClickSpeed[1]++;
+    if (wheelClickSpeed[1] > 5) wheelClickSpeed[1] = 1;
+    printWheelClickSpeed(1);
+    delay(200);
+  }
+  if (!digitalRead(W3PIN)) {
+    wheelClickSpeed[2]++;
+    if (wheelClickSpeed[2] > 5) wheelClickSpeed[2] = 1;
+    printWheelClickSpeed(2);
+    delay(200);
+  }
+  if (!digitalRead(W4PIN)) {
+    wheelClickSpeed[3]++;
+    if (wheelClickSpeed[3] > 5) wheelClickSpeed[3] = 1;
+    printWheelClickSpeed(3);
+    delay(200);
+  }
   if (!digitalRead(UPPIN)) {
     forceUpdate = true;
 
@@ -366,6 +410,7 @@ void loop()
     if (forceUpdate) {
       for (int w = 0; w < NUMWHEELS; w++) {
         printWheelName(w);
+        printWheelClickSpeed(w);
       }
       OSCMessage wheelMsg("/eos/reset");
       SLIPSerial.beginPacket();
@@ -381,7 +426,8 @@ void loop()
           char addr[80] = "/eos/wheel/";
           strncat(addr, pages[currentPage].activeWheels[w].name, sizeof(pages[currentPage].activeWheels[w].name) - 11);
           OSCMessage wheelMsg(addr);
-          wheelMsg.add(wheelin > wheelPos[w] ? 1.0 : -1.0);
+          //wheelMsg.add(wheelin > wheelPos[w] ? 1.0 : -1.0);
+          wheelMsg.add(wheelin > wheelPos[w] ? (wheelClickSpeed[w]) : -1.0*(wheelClickSpeed[w]));
           SLIPSerial.beginPacket();
           wheelMsg.send(SLIPSerial);
           SLIPSerial.endPacket();
