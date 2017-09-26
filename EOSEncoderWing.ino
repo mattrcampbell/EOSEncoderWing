@@ -1,63 +1,61 @@
 
+/*
+ * EOSEncodeWing - This program implements a simple encoder wing for ETC/EOS 
+ *                 using OSC for the Teensy 3.6 platform
+ *                 
+ * Author: Matt Campbell
+ * Date:   9/26/2017
+ * 
+ * Revision 1
+ * 
+ */
 #include <OSCBoards.h>
 #include <OSCBundle.h>
 #include <OSCData.h>
 #include <OSCMatch.h>
 #include <OSCMessage.h>
 #include <OSCTiming.h>
-#ifdef BOARD_HAS_USB_SERIAL
 #include <SLIPEncodedUSBSerial.h>
-SLIPEncodedUSBSerial SLIPSerial(thisBoardsSerialUSB);
-#else
-#include <SLIPEncodedSerial.h>
-SLIPEncodedSerial SLIPSerial(Serial);
-#endif
 #include <string.h>
-
 #include <SPI.h>
-//#include "Wire.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-
 #include <Encoder.h>
 #define OLED_RESET 4
-
 #include <EEPROM.h>
 #include <SPI.h>
 #include <SD.h>
 
-
-/*******************************************************************************
-   Global Variables
- ******************************************************************************/
-#define SELECTPIN 36
-#define UPPIN     35
-#define DOWNPIN   34
+#define SELECTPIN 0
+#define UPPIN     1
+#define DOWNPIN   2
 #define SUPPORTEDWHEELS 50
 #define NUMWHEELS 4
 #define NSIZE     80
 
+// Active wheel structure stores the currently selected wheel name/number
 struct activeWheel {
   char name[NSIZE];
   int num = 1;
 };
+
+// Page structure holds one page of active weels
 struct page {
   activeWheel activeWheels[NUMWHEELS];
 };
 page pages[5];
 int currentPage = 0;
-
 char allWheelNames[SUPPORTEDWHEELS][NSIZE];
 long wheelPos[NUMWHEELS];
 char currentDevice[NSIZE];
 char fileName[12];
-
-Adafruit_SSD1306 *disp[NUMWHEELS];
-Encoder *wheels[NUMWHEELS];;
-
 int line = 0;
 boolean forceUpdate = false;
-boolean updateEEPROM = false;
+boolean updatePageConfig = false;
+
+SLIPEncodedUSBSerial SLIPSerial(thisBoardsSerialUSB);
+Adafruit_SSD1306 *disp[NUMWHEELS];
+Encoder *wheels[NUMWHEELS];;
 
 void displayInit( int i ) {
   disp[i] = new Adafruit_SSD1306(OLED_RESET);
@@ -200,7 +198,7 @@ void wheelMessage(OSCMessage &msg, int addressOffset) {
 
   for (int i = 0; i < NUMWHEELS; i++) {
     if (strncmp(pages[currentPage].activeWheels[i].name, dev, NSIZE) == 0) {
-      setWheelValue(i, value);
+      printWheelValue(i, value);
     }
   }
   strncpy(allWheelNames[wheelNum], dev, NSIZE);
@@ -213,7 +211,6 @@ void chanMessage(OSCMessage &msg, int addressOffset) {
   }
   char tmp[length];
   char dev[length];
-  int value;
   msg.getString(0, tmp, length);
   sscanf(tmp, "%*s [%*d] %*s %[^@ ]", dev);
   if (strncmp(currentDevice, dev, NSIZE) != 0) {
@@ -229,32 +226,6 @@ void chanMessage(OSCMessage &msg, int addressOffset) {
     }
     forceUpdate = true;
   }
-}
-
-void printMessage(int i, char *msg) {
-  //  disp[i]->fillRect(0, 0, disp[i]->width(), disp[i]->height() - 16, 0);
-  //  disp[i]->setCursor(0, 0);
-  disp[i]->setTextSize(1);
-  disp[i]->print(msg);
-  disp[i]->display();
-}
-
-void setWheelValue(int i, int value) {
-  int length = 0;
-  disp[i]->fillRect(0, 0, disp[i]->width(), disp[i]->height() - 16, 0);
-  if (value < -99) {
-    length = NSIZE;
-  } else if (value >= 0 && value < 10) {
-    length = 20;
-  } else if (value > -10 && value < 100) {
-    length = 40;
-  } else {
-    length = 60;
-  }
-  disp[i]->setCursor(disp[i]->width() / 2 - length / 2, 0);
-  disp[i]->setTextSize(4);
-  disp[i]->print(value);
-  disp[i]->display();
 }
 
 int parseOSCMessage(char *msg, int len)
@@ -287,6 +258,32 @@ int parseOSCMessage(char *msg, int len)
   return 0;
 }
 
+void printMessage(int i, char *msg) {
+  //  disp[i]->fillRect(0, 0, disp[i]->width(), disp[i]->height() - 16, 0);
+  //  disp[i]->setCursor(0, 0);
+  disp[i]->setTextSize(1);
+  disp[i]->print(msg);
+  disp[i]->display();
+}
+
+void printWheelValue(int i, int value) {
+  int length = 0;
+  disp[i]->fillRect(0, 0, disp[i]->width(), disp[i]->height() - 16, 0);
+  if (value < -99) {
+    length = NSIZE;
+  } else if (value >= 0 && value < 10) {
+    length = 20;
+  } else if (value > -10 && value < 100) {
+    length = 40;
+  } else {
+    length = 60;
+  }
+  disp[i]->setCursor(disp[i]->width() / 2 - length / 2, 0);
+  disp[i]->setTextSize(4);
+  disp[i]->print(value);
+  disp[i]->display();
+}
+
 void printWheelSelect(int i) {
   disp[i]->fillRect(0, 0, disp[i]->width(), disp[i]->height() - 16, 0);
   disp[i]->setCursor(0, 0);
@@ -305,8 +302,6 @@ void loop()
   static char *curMsg;
   static int i;
   int size;
-  static unsigned long lastDispTime;
-  unsigned long curTime;
 
   if (!digitalRead(UPPIN)) {
     forceUpdate = true;
@@ -321,9 +316,12 @@ void loop()
       currentPage--;
     }
   }
+
+  //
+  // Select wheels for current page
   if (!digitalRead(SELECTPIN)) {
     forceUpdate = true;
-    updateEEPROM = true;
+    updatePageConfig = true;
     for (int w = 0; w < NUMWHEELS; w++) {
       long wheelin = wheels[w]->read();
       if (wheelin != wheelPos[w]) {
@@ -335,7 +333,7 @@ void loop()
     }
     delay(100);
   } else {
-    // Check to see if any OSC commands have come from Eos that we need to respond to.
+    // Check for incoming OSC messages
     size = SLIPSerial.available();
     if (size > 0)
     {
@@ -353,6 +351,7 @@ void loop()
       }
     }
 
+    // Check if message is complete and parse.
     if (SLIPSerial.endofPacket()) {
       if (parseOSCMessage(curMsg, i)) {
         free(curMsg);
@@ -360,9 +359,9 @@ void loop()
         i = 0;
       }
     }
-    if (updateEEPROM) {
+    if (updatePageConfig) {
       writeDevice();
-      updateEEPROM = false;
+      updatePageConfig = false;
     }
     if (forceUpdate) {
       for (int w = 0; w < NUMWHEELS; w++) {
