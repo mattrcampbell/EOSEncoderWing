@@ -96,7 +96,9 @@ void setup()
   pinMode(W2PIN,     INPUT_PULLUP);
   pinMode(W3PIN,     INPUT_PULLUP);
   pinMode(W4PIN,     INPUT_PULLUP);
-
+  pinMode(M1PIN,     INPUT_PULLUP);
+  pinMode(M2PIN,     INPUT_PULLUP);
+  pinMode(M3PIN,     INPUT_PULLUP);
 
   for (int i = 0; i < NUMWHEELS; i++) {
     pages[currentPage].activeWheels[i].name[0] = '\0';
@@ -323,6 +325,27 @@ void loop()
   static int i;
   int size;
 
+  if (!digitalRead(M1PIN)) {
+    OSCMessage wheelMsg("/eos/macro/800/fire#");
+    SLIPSerial.beginPacket();
+    wheelMsg.send(SLIPSerial);
+    SLIPSerial.endPacket();
+    delay(200);
+  }
+  if (!digitalRead(M2PIN)) {
+    OSCMessage wheelMsg("/eos/macro/801/fire#");
+    SLIPSerial.beginPacket();
+    wheelMsg.send(SLIPSerial);
+    SLIPSerial.endPacket();
+    delay(200);
+  }
+  if (!digitalRead(M3PIN)) {
+    OSCMessage wheelMsg("/eos/macro/802/fire#");
+    SLIPSerial.beginPacket();
+    wheelMsg.send(SLIPSerial);
+    SLIPSerial.endPacket();
+    delay(200);
+  }
   if (!digitalRead(W1PIN)) {
     wheelClickSpeed[0]++;
     if (wheelClickSpeed[0] > 5) wheelClickSpeed[0] = 1;
@@ -427,7 +450,7 @@ void loop()
           strncat(addr, pages[currentPage].activeWheels[w].name, sizeof(pages[currentPage].activeWheels[w].name) - 11);
           OSCMessage wheelMsg(addr);
           //wheelMsg.add(wheelin > wheelPos[w] ? 1.0 : -1.0);
-          wheelMsg.add(wheelin > wheelPos[w] ? (wheelClickSpeed[w]) : -1.0*(wheelClickSpeed[w]));
+          wheelMsg.add(wheelin > wheelPos[w] ? (wheelClickSpeed[w]) : -1.0 * (wheelClickSpeed[w]));
           SLIPSerial.beginPacket();
           wheelMsg.send(SLIPSerial);
           SLIPSerial.endPacket();
