@@ -326,21 +326,24 @@ void loop()
   int size;
 
   if (!digitalRead(M1PIN)) {
-    OSCMessage wheelMsg("/eos/macro/800/fire#");
+    OSCMessage wheelMsg("/eos/macro/fire");
+    wheelMsg.add(701);
     SLIPSerial.beginPacket();
     wheelMsg.send(SLIPSerial);
     SLIPSerial.endPacket();
     delay(200);
   }
   if (!digitalRead(M2PIN)) {
-    OSCMessage wheelMsg("/eos/macro/801/fire#");
+    OSCMessage wheelMsg("/eos/macro/fire");
+    wheelMsg.add(702);
     SLIPSerial.beginPacket();
     wheelMsg.send(SLIPSerial);
     SLIPSerial.endPacket();
     delay(200);
   }
   if (!digitalRead(M3PIN)) {
-    OSCMessage wheelMsg("/eos/macro/802/fire#");
+    OSCMessage wheelMsg("/eos/macro/fire");
+    wheelMsg.add(703);
     SLIPSerial.beginPacket();
     wheelMsg.send(SLIPSerial);
     SLIPSerial.endPacket();
