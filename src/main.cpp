@@ -18,13 +18,18 @@
 #include <SLIPEncodedUSBSerial.h>
 #include <string.h>
 #include <SPI.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <Wire.h> 
+#include <LiquidCrystal_I2C.h>
+#include <Keypad.h>
+
+
 #include <Encoder.h>
 #define OLED_RESET 4
 #include <EEPROM.h>
 #include <SPI.h>
 #include <SD.h>
+
+#include "header.h"
 
 #define SELECTPIN 0
 #define UPPIN     1
@@ -40,6 +45,21 @@
 #define SUPPORTEDWHEELS 50
 #define NUMWHEELS 4
 #define NSIZE     80
+
+const byte ROWS = 5; //four rows
+const byte COLS = 2; //three columns
+char keys[ROWS][COLS] = {
+{'a','1'},
+{'b','2'},
+{'c','3'},
+{'d','4'},
+{'e','5'}
+};
+byte rowPins[ROWS] = {33, 34, 35, 36, 37}; //connect to the row pinouts of the kpd
+byte colPins[COLS] = {39, 38}; //connect to the column pinouts of the kpd
+
+Keypad kpd = Keypad( makeKeymap(keys), rowPins, colPins, ROWS, COLS );
+
 
 // Active wheel structure stores the currently selected wheel name/number
 struct activeWheel {
@@ -63,28 +83,13 @@ boolean updatePageConfig = false;
 float wheelClickSpeed[NUMWHEELS];
 
 SLIPEncodedUSBSerial SLIPSerial(thisBoardsSerialUSB);
-Adafruit_SSD1306 *disp[NUMWHEELS];
+LiquidCrystal_I2C lcd(0x27,40,2);
 Encoder *wheels[NUMWHEELS];;
 
 void displayInit( int i ) {
-  disp[i] = new Adafruit_SSD1306(OLED_RESET);
-  byte addr = 0;
-  switch (i) {
-    case 0: addr = 0x3D; disp[i]->begin(SSD1306_SWITCHCAPVCC, &Wire, addr); break;
-    case 1: addr = 0x3C; disp[i]->begin(SSD1306_SWITCHCAPVCC, &Wire, addr); break;
-    case 2: addr = 0x3D; disp[i]->begin(SSD1306_SWITCHCAPVCC, &Wire1, addr); break;
-    case 3: addr = 0x3C; disp[i]->begin(SSD1306_SWITCHCAPVCC, &Wire1, addr); break;
-  }
-  disp[i]->setRotation(2);
-  disp[i]->clearDisplay();
-  disp[i]->stopscroll();
-  disp[i]->display();
-  disp[i]->setCursor(0, 0);
-  disp[i]->setTextSize(1);
-  disp[i]->setTextColor(WHITE);
-  disp[i]->print("Initializing ");
-  disp[i]->println(i);
-  disp[i]->display();
+  lcd.init();                      // initialize the lcd 
+  lcd.backlight();
+  lcd.clear();
 }
 
 void setup()
@@ -129,25 +134,65 @@ void setup()
   }
 }
 
-int findFileName() {
-  int lastind = 0;
-  for (int i = 0; i < EEPROM.length(); i += sizeof(int) + NSIZE) {
-    int ind;
-    char n[NSIZE];
-    EEPROM.get(i, ind);
-    EEPROM.get(i + sizeof(int), n);
-    if (strncmp(n, currentDevice, NSIZE) == 0) {
-      return ind;
+bool readLine(File &f, char* line, size_t maxLen) {
+  for (size_t n = 0; n < maxLen; n++) {
+    int c = f.read();
+    if ( c < 0 && n == 0) return false;  // EOF
+    if (c < 0 || c == '\n') {
+      line[n] = 0;
+      return true;
     }
-    if (n[0] == 0) {
-      lastind++;
-      EEPROM.put(i, lastind);
-      EEPROM.put(i + sizeof(int), currentDevice);
-      return lastind;
-    }
-    lastind = ind;
+    line[n] = c;
   }
+  return false; // line too long
+}
+
+int findFileName() {
+  if (!SD.exists("index.txt")) {
+    File dataFile = SD.open("index.txt", FILE_WRITE);
+    dataFile.close();
+  }
+  File dataFile = SD.open("index.txt");
+  int i=0;
+  while (dataFile.available()) {
+    char line[200], *ptr, *str;
+    if (!readLine(dataFile, line, sizeof(line))) {
+      return false;  // EOF or too long
+    }
+    char *comma = strchr(line,',');
+    *comma = '\0';
+    int num = atoi(comma+1);
+    if(strcmp(currentDevice,line)==0){
+      return num;
+    }
+    i++;
+  }
+
+  dataFile.close();
+  dataFile = SD.open("index.txt", FILE_WRITE);
+  dataFile.printf("%s,%d\n", currentDevice, i);
+  dataFile.close();
+
   return -1;
+
+  // int lastind = 0;
+  // for (int i = 0; i < EEPROM.length(); i += sizeof(int) + NSIZE) {
+  //   int ind;
+  //   char n[NSIZE];
+  //   EEPROM.get(i, ind);
+  //   EEPROM.get(i + sizeof(int), n);
+  //   if (strncmp(n, currentDevice, NSIZE) == 0) {
+  //     return ind;
+  //   }
+  //   if (n[0] == 0) {
+  //     lastind++;
+  //     EEPROM.put(i, lastind);
+  //     EEPROM.put(i + sizeof(int), currentDevice);
+  //     return lastind;
+  //   }
+  //   lastind = ind;
+  // }
+  // return -1;
 }
 
 void writeDevice() {
@@ -176,22 +221,7 @@ void setWheelName(int num, char *name, int wNum) {
   strncpy(pages[currentPage].activeWheels[num].name, name, sizeof(pages[currentPage].activeWheels[num].name));
   pages[currentPage].activeWheels[num].num = wNum;
 }
-void printWheelName(int num) {
-  disp[num]->clearDisplay();
-  int length;
-  if (strlen(pages[currentPage].activeWheels[num].name) > 10) {
-    length = strlen(pages[currentPage].activeWheels[num].name) * 5;
-    disp[num]->setTextSize(1);
-  } else {
-    length = strlen(pages[currentPage].activeWheels[num].name) * 10;
-    disp[num]->setTextSize(2);
-  }
-  disp[num]->setCursor(disp[num]->width() / 2 - length / 2, disp[num]->height() - 16);
 
-  disp[num]->print(pages[currentPage].activeWheels[num].name);
-  disp[num]->display();
-
-}
 
 void wheelMessage(OSCMessage &msg, int addressOffset) {
   int length = msg.getDataLength(0);
@@ -264,9 +294,9 @@ int parseOSCMessage(char *msg, int len)
       OSCin.route("/eos/out/active/wheel", wheelMessage);
       OSCin.route("/eos/out/active/chan", chanMessage);
     } else {
-      disp[0]->print("error ");
-      disp[0]->println(OSCin.getError());
-      disp[0]->display();
+      // TODO disp[0]->print("error ");
+      // TODO disp[0]->println(OSCin.getError());
+      // TODO disp[0]->display();
     }
     return 1;
   }
@@ -274,81 +304,120 @@ int parseOSCMessage(char *msg, int len)
 }
 
 void printMessage(int i, char *msg) {
-  //  disp[i]->fillRect(0, 0, disp[i]->width(), disp[i]->height() - 16, 0);
-  //  disp[i]->setCursor(0, 0);
-  disp[i]->setTextSize(1);
-  disp[i]->print(msg);
-  disp[i]->display();
+  //  // TODO disp[i]->fillRect(0, 0, // TODO disp[i]->width(), // TODO disp[i]->height() - 16, 0);
+  //  // TODO disp[i]->setCursor(0, 0);
+  // TODO disp[i]->setTextSize(1);
+  // TODO disp[i]->print(msg);
+  // TODO disp[i]->display();
+  lcd.setCursor(i*10,0);
+  lcd.print(msg);
 }
 
-void printWheelValue(int i, int value) {
-  int length = 0;
-  disp[i]->fillRect(0, 0, disp[i]->width() - 10, disp[i]->height() - 16, 0);
-  if (value < -99) {
-    length = NSIZE;
-  } else if (value >= 0 && value < 10) {
-    length = 20;
-  } else if (value > -10 && value < 100) {
-    length = 40;
-  } else {
-    length = 60;
-  }
-  disp[i]->setCursor(disp[i]->width() / 2 - length / 2, 0);
-  disp[i]->setTextSize(4);
-  disp[i]->print(value);
-  disp[i]->display();
+void printWheelName(int num) {
+  lcd.setCursor(num*10,0);
+  int padlen = (10 - strlen(pages[currentPage].activeWheels[num].name)) / 2;
+  lcd.printf( "%*s%s%*s", padlen,"",pages[currentPage].activeWheels[num].name,padlen,"" );
+
+}
+
+void printWheelValue(int num, int value) {
+
+  char s[10];
+  itoa(value,s,10);
+  lcd.setCursor(num*10,1);
+  int padlen = (10 - strlen(s)) / 2;
+  lcd.printf( "%*s%s%*s", padlen,"",s,padlen,"" );
 }
 void printWheelClickSpeed(int i) {
-  disp[i]->fillRect(disp[i]->width() - 10, 0, disp[i]->width() - 10, disp[i]->height() - 16, 0);
-  disp[i]->setCursor(disp[i]->width() - 10, 0);
-  disp[i]->setTextSize(1);
-  disp[i]->print((int)wheelClickSpeed[i]);
-  disp[i]->display();
+  // TODO disp[i]->fillRect(// TODO disp[i]->width() - 10, 0, // TODO disp[i]->width() - 10, // TODO disp[i]->height() - 16, 0);
+  // TODO disp[i]->setCursor(// TODO disp[i]->width() - 10, 0);
+  // TODO disp[i]->setTextSize(1);
+  // TODO disp[i]->print((int)wheelClickSpeed[i]);
+  // TODO disp[i]->display();
 }
 
 void printWheelSelect(int i) {
-  disp[i]->fillRect(0, 0, disp[i]->width(), disp[i]->height() - 16, 0);
-  disp[i]->setCursor(0, 0);
-  disp[i]->setTextSize(1);
-  if (pages[currentPage].activeWheels[i].num - 2 >= 0)disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num - 2]);
-  if (pages[currentPage].activeWheels[i].num - 1 >= 0)disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num - 1]);
-  disp[i]->setTextSize(2);
-  disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num]);
-  disp[i]->setTextSize(1);
-  disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num + 1]);
-  disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num + 2]);
-  disp[i]->display();
+  // TODO disp[i]->fillRect(0, 0, // TODO disp[i]->width(), // TODO disp[i]->height() - 16, 0);
+  // TODO disp[i]->setCursor(0, 0);
+  // TODO disp[i]->setTextSize(1);
+  //if (pages[currentPage].activeWheels[i].num - 2 >= 0)// TODO disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num - 2]);
+  //if (pages[currentPage].activeWheels[i].num - 1 >= 0)// TODO disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num - 1]);
+  // TODO disp[i]->setTextSize(2);
+  // TODO disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num]);
+  // TODO disp[i]->setTextSize(1);
+  // TODO disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num + 1]);
+  // TODO disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num + 2]);
+  // TODO disp[i]->display();
+  
+  //lcd.clear();
+  lcd.setCursor(i*10,0);
+  if( pages[currentPage].activeWheels[i].num <= SUPPORTEDWHEELS){
+    lcd.printf( "%10s", allWheelNames[pages[currentPage].activeWheels[i].num] );
+  } else {
+    lcd.printf( "ERROR" );
+  }
+
 }
 void loop()
 {
   static char *curMsg;
   static int i;
   int size;
+  if (kpd.getKeys()) {
+    for (int i = 0; i < LIST_MAX; i++)  // Scan the whole key list.
+    {
+      if (kpd.key[i].stateChanged && kpd.key[i].kstate == PRESSED)  // Only find keys that have changed state.
+      {
+        switch(kpd.key[i].kchar){
+          case '1':
+          case '2':
+          case '3':
+          case '4':
+          case '5':
+            currentPage = kpd.key[i].kchar - '1';
+            forceUpdate = true;
+            break;
+          case 'a':
+          case 'b':
+          case 'c':
+          case 'd':
+          case 'e':
+            OSCMessage macroMsg("/eos/macro/fire");
+            macroMsg.add(700+kpd.key[i].kchar-'a');
+            SLIPSerial.beginPacket();
+            macroMsg.send(SLIPSerial);
+            SLIPSerial.endPacket();
+            delay(200);
+            break;
+        }
+      }
+    }
+  }
 
-  if (!digitalRead(M1PIN)) {
-    OSCMessage wheelMsg("/eos/macro/fire");
-    wheelMsg.add(701);
-    SLIPSerial.beginPacket();
-    wheelMsg.send(SLIPSerial);
-    SLIPSerial.endPacket();
-    delay(200);
-  }
-  if (!digitalRead(M2PIN)) {
-    OSCMessage wheelMsg("/eos/macro/fire");
-    wheelMsg.add(702);
-    SLIPSerial.beginPacket();
-    wheelMsg.send(SLIPSerial);
-    SLIPSerial.endPacket();
-    delay(200);
-  }
-  if (!digitalRead(M3PIN)) {
-    OSCMessage wheelMsg("/eos/macro/fire");
-    wheelMsg.add(703);
-    SLIPSerial.beginPacket();
-    wheelMsg.send(SLIPSerial);
-    SLIPSerial.endPacket();
-    delay(200);
-  }
+  // if (!digitalRead(M1PIN)) {
+  //   OSCMessage wheelMsg("/eos/macro/fire");
+  //   wheelMsg.add(701);
+  //   SLIPSerial.beginPacket();
+  //   wheelMsg.send(SLIPSerial);
+  //   SLIPSerial.endPacket();
+  //   delay(200);
+  // }
+  // if (!digitalRead(M2PIN)) {
+  //   OSCMessage wheelMsg("/eos/macro/fire");
+  //   wheelMsg.add(702);
+  //   SLIPSerial.beginPacket();
+  //   wheelMsg.send(SLIPSerial);
+  //   SLIPSerial.endPacket();
+  //   delay(200);
+  // }
+  // if (!digitalRead(M3PIN)) {
+  //   OSCMessage wheelMsg("/eos/macro/fire");
+  //   wheelMsg.add(703);
+  //   SLIPSerial.beginPacket();
+  //   wheelMsg.send(SLIPSerial);
+  //   SLIPSerial.endPacket();
+  //   delay(200);
+  // }
   if (!digitalRead(W1PIN)) {
     wheelClickSpeed[0]++;
     if (wheelClickSpeed[0] > 5) wheelClickSpeed[0] = 1;
@@ -373,34 +442,34 @@ void loop()
     printWheelClickSpeed(3);
     delay(200);
   }
-  if (!digitalRead(UPPIN)) {
-    forceUpdate = true;
+  // if (!digitalRead(UPPIN)) {
+  //   forceUpdate = true;
 
-    if (currentPage < 4) {
-      currentPage++;
-    }
-  } else if (!digitalRead(DOWNPIN)) {
-    forceUpdate = true;
+  //   if (currentPage < 4) {
+  //     currentPage++;
+  //   }
+  // } else if (!digitalRead(DOWNPIN)) {
+  //   forceUpdate = true;
 
-    if (currentPage > 0) {
-      currentPage--;
-    }
-  }
+  //   if (currentPage > 0) {
+  //     currentPage--;
+  //   }
+  // }
 
   //
   // Select wheels for current page
   if (!digitalRead(SELECTPIN)) {
-    forceUpdate = true;
-    updatePageConfig = true;
-    for (int w = 0; w < NUMWHEELS; w++) {
-      long wheelin = wheels[w]->read();
-      if (wheelin != wheelPos[w]) {
-        pages[currentPage].activeWheels[w].num += wheelin > wheelPos[w] ? 1 : -1;
-        strncpy(pages[currentPage].activeWheels[w].name, allWheelNames[pages[currentPage].activeWheels[w].num], NSIZE);
-        wheelPos[w] = wheelin;
-      }
-      printWheelSelect(w);
-    }
+    // forceUpdate = true;
+    // updatePageConfig = true;
+    // for (int w = 0; w < NUMWHEELS; w++) {
+    //   long wheelin = wheels[w]->read();
+    //   if (wheelin != wheelPos[w]) {
+    //     pages[currentPage].activeWheels[w].num += wheelin > wheelPos[w] ? 1 : -1;
+    //     strncpy(pages[currentPage].activeWheels[w].name, allWheelNames[pages[currentPage].activeWheels[w].num], NSIZE);
+    //     wheelPos[w] = wheelin;
+    //   }
+    //   printWheelSelect(w);
+    // }
     delay(100);
   } else {
     // Check for incoming OSC messages
@@ -413,8 +482,8 @@ void loop()
         curMsg[i] = (char)(SLIPSerial.read());
         if (curMsg[i] == -1) {
           curMsg[i] = 0;
-          disp[1]->println("ERROR!");
-          disp[1]->display();
+          // TODO disp[1]->println("ERROR!");
+          // TODO disp[1]->display();
           break;
         }
         i++;
