@@ -9,69 +9,40 @@
    Revision 1
 
 */
+#include <ArduinoJson.h>
+#include <EncoderTool.h>
+#include <Keypad.h>
+#include <LiquidCrystal_I2C.h>
 #include <OSCBoards.h>
 #include <OSCBundle.h>
 #include <OSCData.h>
 #include <OSCMatch.h>
 #include <OSCMessage.h>
 #include <OSCTiming.h>
-#include <SLIPEncodedUSBSerial.h>
-#include <string.h>
-#include <SPI.h>
-#include <Wire.h> 
-#include <LiquidCrystal_I2C.h>
-#include <Keypad.h>
-
-
-#include <Encoder.h>
-#define OLED_RESET 4
-#include <EEPROM.h>
-#include <SPI.h>
 #include <SD.h>
+#include <SLIPEncodedUSBSerial.h>
+#include <SPI.h>
+#include <Wire.h>
+#include <string.h>
 
 #include "header.h"
 
-#define SELECTPIN 0
-#define UPPIN     1
-#define DOWNPIN   2
-#define M1PIN     3
-#define M2PIN     4
-#define M3PIN     5
-
-#define W1PIN     6
-#define W2PIN     7
-#define W3PIN     8
-#define W4PIN     9
-#define SUPPORTEDWHEELS 50
-#define NUMWHEELS 4
-#define NSIZE     80
-
-const byte ROWS = 5; //four rows
-const byte COLS = 2; //three columns
+const byte ROWS = 5;  // four rows
+const byte COLS = 2;  // three columns
 char keys[ROWS][COLS] = {
-{'a','1'},
-{'b','2'},
-{'c','3'},
-{'d','4'},
-{'e','5'}
-};
-byte rowPins[ROWS] = {33, 34, 35, 36, 37}; //connect to the row pinouts of the kpd
-byte colPins[COLS] = {39, 38}; //connect to the column pinouts of the kpd
+    {'a', '1'},
+    {'b', '2'},
+    {'c', '3'},
+    {'d', '4'},
+    {'e', '5'}};
+byte rowPins[ROWS] = {33, 34, 35, 36, 37};  // connect to the row pinouts of the kpd
+byte colPins[COLS] = {39, 38};              // connect to the column pinouts of the kpd
 
-Keypad kpd = Keypad( makeKeymap(keys), rowPins, colPins, ROWS, COLS );
+Keypad kpd = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
+Config config;
 
-// Active wheel structure stores the currently selected wheel name/number
-struct activeWheel {
-  char name[NSIZE];
-  int num = 1;
-};
-
-// Page structure holds one page of active weels
-struct page {
-  activeWheel activeWheels[NUMWHEELS];
-};
-page pages[5];
+// page pages[5];
 int currentPage = 0;
 char allWheelNames[SUPPORTEDWHEELS][NSIZE];
 long wheelPos[NUMWHEELS];
@@ -79,153 +50,194 @@ char currentDevice[NSIZE];
 char fileName[12];
 int line = 0;
 boolean forceUpdate = false;
-boolean updatePageConfig = false;
-float wheelClickSpeed[NUMWHEELS];
+boolean selectMode = false;
+boolean handshakeCompete = false;
 
 SLIPEncodedUSBSerial SLIPSerial(thisBoardsSerialUSB);
-LiquidCrystal_I2C lcd(0x27,40,2);
-Encoder *wheels[NUMWHEELS];;
+LiquidCrystal_I2C lcd(0x27, 40, 2);
 
-void displayInit( int i ) {
-  lcd.init();                      // initialize the lcd 
-  lcd.backlight();
-  lcd.clear();
-}
+EncoderTool::Encoder *encoders[NUMWHEELS];
+EncoderTool::Encoder enc1, enc2, enc3, enc4;
 
-void setup()
-{
+void setup() {
+  Serial1.begin(115200);
   pinMode(SELECTPIN, INPUT_PULLUP);
-  pinMode(UPPIN,     INPUT_PULLUP);
-  pinMode(DOWNPIN,   INPUT_PULLUP);
-  pinMode(W1PIN,     INPUT_PULLUP);
-  pinMode(W2PIN,     INPUT_PULLUP);
-  pinMode(W3PIN,     INPUT_PULLUP);
-  pinMode(W4PIN,     INPUT_PULLUP);
-  pinMode(M1PIN,     INPUT_PULLUP);
-  pinMode(M2PIN,     INPUT_PULLUP);
-  pinMode(M3PIN,     INPUT_PULLUP);
+  pinMode(W1PIN, INPUT_PULLUP);
+  pinMode(W2PIN, INPUT_PULLUP);
+  pinMode(W3PIN, INPUT_PULLUP);
+  pinMode(W4PIN, INPUT_PULLUP);
 
   for (int i = 0; i < NUMWHEELS; i++) {
-    pages[currentPage].activeWheels[i].name[0] = '\0';
+    // pages[currentPage].activeWheels[i].name[0] = '\0';
     allWheelNames[i][0] = '\0';
     wheelPos[i] = -999;
-    displayInit(i);
-    wheelClickSpeed[i] = 1.0;
   }
-  wheels[0] = new Encoder(32, 31);
-  wheels[1] = new Encoder(30, 29);
-  wheels[2] = new Encoder(28, 27);
-  wheels[3] = new Encoder(26, 25);
+  lcd.init();  // initialize the lcd
+  lcd.backlight();
+  lcd.clear();
 
   SLIPSerial.begin(115200);
   // This is a hack around an arduino bug. It was taken from the OSC library examples
-  while (!Serial);
+  while (!Serial)
+    ;
 
   // this is necessary for reconnecting a device because it need some timme for the serial port to get open, but meanwhile the handshake message was send from eos
   SLIPSerial.beginPacket();
-  SLIPSerial.write((const uint8_t*)"OK", 2);
+  SLIPSerial.write((const uint8_t *)"OK", 2);
   SLIPSerial.endPacket();
   delay(200);
 
   if (!SD.begin(BUILTIN_SDCARD)) {
-    printMessage(3, "SD FAIL");
+    printMessage(0, 3, "SD FAIL", false);
   } else {
-    printMessage(3, "SD INIT");
+    printMessage(0, 3, "SD INIT", false);
   }
+
+  encoders[3] = &enc1;
+  encoders[2] = &enc2;
+  encoders[1] = &enc3;
+  encoders[0] = &enc4;
+
+  enc1.begin(32, 31);
+  enc2.begin(30, 29);
+  enc3.begin(28, 27);
+  enc4.begin(26, 25);
 }
 
-bool readLine(File &f, char* line, size_t maxLen) {
+bool readLine(File &f, char *line, size_t maxLen) {
   for (size_t n = 0; n < maxLen; n++) {
     int c = f.read();
-    if ( c < 0 && n == 0) return false;  // EOF
+    if (c < 0 && n == 0) return false;  // EOF
     if (c < 0 || c == '\n') {
-      line[n] = 0;
+      line[n] = '\0';
       return true;
     }
     line[n] = c;
   }
-  return false; // line too long
+  return false;  // line too long
 }
 
 int findFileName() {
   if (!SD.exists("index.txt")) {
-    File dataFile = SD.open("index.txt", FILE_WRITE);
-    dataFile.close();
+    File indexFile = SD.open("index.txt", FILE_WRITE);
+    indexFile.close();
   }
-  File dataFile = SD.open("index.txt");
-  int i=0;
-  while (dataFile.available()) {
-    char line[200], *ptr, *str;
-    if (!readLine(dataFile, line, sizeof(line))) {
-      return false;  // EOF or too long
+
+  File indexFile = SD.open("index.txt");
+  int i = 0;
+  while (indexFile.available()) {
+    char line[200];
+    if (!readLine(indexFile, line, sizeof(line))) {
+      return false;
     }
-    char *comma = strchr(line,',');
+    char *comma = strchr(line, ',');
     *comma = '\0';
-    int num = atoi(comma+1);
-    if(strcmp(currentDevice,line)==0){
+    int num = atoi(comma + 1);
+    if (strcmp(currentDevice, line) == 0) {
       return num;
     }
     i++;
   }
 
-  dataFile.close();
-  dataFile = SD.open("index.txt", FILE_WRITE);
-  dataFile.printf("%s,%d\n", currentDevice, i);
-  dataFile.close();
+  indexFile.close();
+  indexFile = SD.open("index.txt", FILE_WRITE);
+  indexFile.printf("%s,%d\n", currentDevice, i);
+  indexFile.close();
 
   return -1;
-
-  // int lastind = 0;
-  // for (int i = 0; i < EEPROM.length(); i += sizeof(int) + NSIZE) {
-  //   int ind;
-  //   char n[NSIZE];
-  //   EEPROM.get(i, ind);
-  //   EEPROM.get(i + sizeof(int), n);
-  //   if (strncmp(n, currentDevice, NSIZE) == 0) {
-  //     return ind;
-  //   }
-  //   if (n[0] == 0) {
-  //     lastind++;
-  //     EEPROM.put(i, lastind);
-  //     EEPROM.put(i + sizeof(int), currentDevice);
-  //     return lastind;
-  //   }
-  //   lastind = ind;
-  // }
-  // return -1;
 }
 
 void writeDevice() {
   char fn[12];
   sprintf(fn, "%d.txt", findFileName());
-  SD.remove(fn);
-  File dataFile = SD.open(fn, FILE_WRITE);
-  dataFile.write((const uint8_t *)&pages, sizeof(pages));
-  dataFile.close();
+  saveConfiguration(fn, config);
+  // SD.remove(fn);
+  // File dataFile = SD.open(fn, FILE_WRITE);
+  // dataFile.write((const uint8_t *)&pages, sizeof(pages));
+  // dataFile.close();
 }
 
 boolean readDevice() {
-
   char fn[12];
   sprintf(fn, "%d.txt", findFileName());
   if (!SD.exists(fn)) {
     return false;
   }
-  File dataFile = SD.open(fn);
-  dataFile.read((uint8_t *)&pages, sizeof(pages));
-  dataFile.close();
+  // File dataFile = SD.open(fn);
+  // dataFile.read((uint8_t *)&pages, sizeof(pages));
+  // dataFile.close();
+  loadConfiguration(fn, config);
   return true;
 }
 
-void setWheelName(int num, char *name, int wNum) {
-  strncpy(pages[currentPage].activeWheels[num].name, name, sizeof(pages[currentPage].activeWheels[num].name));
-  pages[currentPage].activeWheels[num].num = wNum;
+// Loads the configuration from a file
+void loadConfiguration(const char *filename, Config &config) {
+  File file = SD.open(filename);
+
+  // Allocate a temporary JsonDocument
+  // Don't forget to change the capacity to match your requirements.
+  // Use https://arduinojson.org/v6/assistant to compute the capacity.
+  StaticJsonDocument<1024> doc;
+
+  // Deserialize the JSON document
+  DeserializationError error = deserializeJson(doc, file);
+  if (error)
+    printMessage(1, 0, "Failed to read file, using default configuration", false);
+
+  for (int p = 0; p < NPAGES; p++) {
+    for (int w = 0; w < NUMWHEELS; w++) {
+      if (doc[p][w]["num"] != NULL) {
+        strncpy(config.pages[p].activeWheels[w].name, doc[p][w]["name"], NSIZE);
+        config.pages[p].activeWheels[w].num = doc[p][w]["num"];
+      } else {
+        strncpy(config.pages[p].activeWheels[w].name, "Intens", NSIZE);
+        config.pages[p].activeWheels[w].num = 1;
+      }
+    }
+  }
+  file.close();
 }
 
+// Saves the configuration to a file
+void saveConfiguration(const char *filename, const Config &config) {
+  SD.remove(filename);
+  File file = SD.open(filename, FILE_WRITE);
+  if (!file) {
+    Serial.println(F("Failed to create file"));
+    return;
+  }
+
+  // Allocate a temporary JsonDocument
+  // Don't forget to change the capacity to match your requirements.
+  // Use https://arduinojson.org/assistant to compute the capacity.
+  StaticJsonDocument<1024> doc;
+
+  for (int p = 0; p < NPAGES; p++) {
+    for (int w = 0; w < NUMWHEELS; w++) {
+      doc[p][w]["name"] = config.pages[p].activeWheels[w].name;
+      doc[p][w]["num"] = config.pages[p].activeWheels[w].num;
+    }
+  }
+  if (serializeJson(doc, file) == 0) {
+    Serial.println(F("Failed to write to file"));
+  }
+  file.close();
+}
+
+int getPadding(int size, const char *msg){
+    int padlen = (size - strlen(msg)) / 2;
+    if( padlen > size || padlen < 0) padlen = 0;
+    return padlen;
+}
+
+void setWheelName(int num, const char *name, int wNum) {
+  strncpy(config.pages[currentPage].activeWheels[num].name, name, sizeof(config.pages[currentPage].activeWheels[num].name));
+  config.pages[currentPage].activeWheels[num].num = wNum;
+}
 
 void wheelMessage(OSCMessage &msg, int addressOffset) {
   int length = msg.getDataLength(0);
-  if (length == 0 ) {
+  if (length == 0) {
     return;
   }
   char tmp[length];
@@ -234,7 +246,7 @@ void wheelMessage(OSCMessage &msg, int addressOffset) {
   msg.getString(0, tmp, length);
 
   sscanf(tmp, "%[^[][%d", dev, &value);
-  dev[strlen(dev) - 2] = 0; // Remove the spaces
+  dev[strlen(dev) - 2] = 0;  // Remove the spaces
 
   // Get the wheel address
   msg.getAddress(tmp, addressOffset + 1);
@@ -242,22 +254,33 @@ void wheelMessage(OSCMessage &msg, int addressOffset) {
   int wheelNum = atoi(tmp) - 1;
 
   for (int i = 0; i < NUMWHEELS; i++) {
-    if (strncmp(pages[currentPage].activeWheels[i].name, dev, NSIZE) == 0) {
+    if (strncmp(config.pages[currentPage].activeWheels[i].name, dev, NSIZE) == 0) {
       printWheelValue(i, value);
     }
   }
+  Serial1.printf("msg %s\nl %d  d %s\n", msg, length, dev);
+
   strncpy(allWheelNames[wheelNum], dev, NSIZE);
 }
 
 void chanMessage(OSCMessage &msg, int addressOffset) {
   int length = msg.getDataLength(0);
-  if (length == 0 ) {
+  if (length == 0) {
     return;
   }
+
   char tmp[length];
   char dev[length];
-  msg.getString(0, tmp, length);
+  int dlen = msg.getString(0, tmp, length);
+  if (dlen == 1) {
+    strcpy(currentDevice, "");
+    currentPage = 0;
+    forceUpdate = true;
+    return;
+  }
+
   sscanf(tmp, "%*s [%*d] %*s %[^@ ]", dev);
+
   if (strncmp(currentDevice, dev, NSIZE) != 0) {
     currentPage = 0;
     strncpy(currentDevice, dev, NSIZE);
@@ -267,22 +290,21 @@ void chanMessage(OSCMessage &msg, int addressOffset) {
         printWheelName(i);
       }
 
-      writeDevice();
+      // writeDevice();
     }
     forceUpdate = true;
   }
 }
 
-int parseOSCMessage(char *msg, int len)
-{
-  // check to see if this is the handshake string
-  if (strstr(msg, "ETCOSC?"))
-  {
-    printMessage(0, "Handshake");
+int parseOSCMessage(char *msg, int len) {
+  //  check to see if this is the handshake string
+  if (strstr(msg, "ETCOSC?")) {
+    printMessage(1, 0, "Handshake Complete!", false);
     SLIPSerial.beginPacket();
-    SLIPSerial.write((const uint8_t*)"OK", 2);
+    SLIPSerial.write((const uint8_t *)"OK", 2);
     SLIPSerial.endPacket();
     SLIPSerial.flush();
+    handshakeCompete = true;
     return 1;
   } else {
     OSCMessage OSCin;
@@ -294,196 +316,157 @@ int parseOSCMessage(char *msg, int len)
       OSCin.route("/eos/out/active/wheel", wheelMessage);
       OSCin.route("/eos/out/active/chan", chanMessage);
     } else {
-      // TODO disp[0]->print("error ");
-      // TODO disp[0]->println(OSCin.getError());
-      // TODO disp[0]->display();
+      char m[20];
+      sprintf(m, "OSC Error [%d]", OSCin.getError());
+      printMessage(0, 0, m, false);
     }
     return 1;
   }
   return 0;
 }
-
-void printMessage(int i, char *msg) {
-  //  // TODO disp[i]->fillRect(0, 0, // TODO disp[i]->width(), // TODO disp[i]->height() - 16, 0);
-  //  // TODO disp[i]->setCursor(0, 0);
-  // TODO disp[i]->setTextSize(1);
-  // TODO disp[i]->print(msg);
-  // TODO disp[i]->display();
-  lcd.setCursor(i*10,0);
-  lcd.print(msg);
+void printMessage(int row, int slot, const char *msg, boolean center = true) {
+  lcd.setCursor(slot * 10, row);
+  lcd.print("          ");
+  lcd.setCursor(slot * 10, row);
+  if (center) {
+    int padlen = getPadding(10, msg);
+    Serial1.printf("%d %d %d : %s\n",row, slot, padlen, msg);
+    lcd.printf("%*s%s%*s", padlen, "", msg, padlen, "");
+  } else {
+    lcd.print(msg);
+  }
 }
 
 void printWheelName(int num) {
-  lcd.setCursor(num*10,0);
-  int padlen = (10 - strlen(pages[currentPage].activeWheels[num].name)) / 2;
-  lcd.printf( "%*s%s%*s", padlen,"",pages[currentPage].activeWheels[num].name,padlen,"" );
-
+  lcd.setCursor(num * 10, 0);
+  lcd.print("          ");
+  lcd.setCursor(num * 10, 0);
+  int padlen = getPadding(10, config.pages[currentPage].activeWheels[num].name);
+  lcd.printf("%*s%s%*s", padlen, "", config.pages[currentPage].activeWheels[num].name, padlen, "");
 }
 
 void printWheelValue(int num, int value) {
-
   char s[10];
-  itoa(value,s,10);
-  lcd.setCursor(num*10,1);
-  int padlen = (10 - strlen(s)) / 2;
-  lcd.printf( "%*s%s%*s", padlen,"",s,padlen,"" );
-}
-void printWheelClickSpeed(int i) {
-  // TODO disp[i]->fillRect(// TODO disp[i]->width() - 10, 0, // TODO disp[i]->width() - 10, // TODO disp[i]->height() - 16, 0);
-  // TODO disp[i]->setCursor(// TODO disp[i]->width() - 10, 0);
-  // TODO disp[i]->setTextSize(1);
-  // TODO disp[i]->print((int)wheelClickSpeed[i]);
-  // TODO disp[i]->display();
+  itoa(value, s, 10);
+  int padlen = getPadding(10, s);
+  lcd.setCursor(num * 10, 1);
+  lcd.print("          ");
+  lcd.setCursor(num * 10, 1);
+  lcd.printf("%*s%s%*s", padlen, "", s, padlen, "");
 }
 
-void printWheelSelect(int i) {
-  // TODO disp[i]->fillRect(0, 0, // TODO disp[i]->width(), // TODO disp[i]->height() - 16, 0);
-  // TODO disp[i]->setCursor(0, 0);
-  // TODO disp[i]->setTextSize(1);
-  //if (pages[currentPage].activeWheels[i].num - 2 >= 0)// TODO disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num - 2]);
-  //if (pages[currentPage].activeWheels[i].num - 1 >= 0)// TODO disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num - 1]);
-  // TODO disp[i]->setTextSize(2);
-  // TODO disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num]);
-  // TODO disp[i]->setTextSize(1);
-  // TODO disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num + 1]);
-  // TODO disp[i]->println(allWheelNames[pages[currentPage].activeWheels[i].num + 2]);
-  // TODO disp[i]->display();
-  
-  //lcd.clear();
-  lcd.setCursor(i*10,0);
-  if( pages[currentPage].activeWheels[i].num <= SUPPORTEDWHEELS){
-    lcd.printf( "%10s", allWheelNames[pages[currentPage].activeWheels[i].num] );
+void printWheelSelect(int num) {
+  if (config.pages[currentPage].activeWheels[num].num <= SUPPORTEDWHEELS) {
+    char m[NSIZE+2];
+    sprintf(m,"[%s]", allWheelNames[config.pages[currentPage].activeWheels[num].num]);
+    printMessage(0,num,m, true);
+    sprintf(m,"[%d]", config.pages[currentPage].activeWheels[num].num);
+    printMessage(1,num,m, true);
   } else {
-    lcd.printf( "ERROR" );
+    printMessage(0,num,"ERROR", true);
   }
-
 }
-void loop()
-{
+void loop() {
   static char *curMsg;
   static int i;
   int size;
   if (kpd.getKeys()) {
-    for (int i = 0; i < LIST_MAX; i++)  // Scan the whole key list.
-    {
-      if (kpd.key[i].stateChanged && kpd.key[i].kstate == PRESSED)  // Only find keys that have changed state.
-      {
-        switch(kpd.key[i].kchar){
-          case '1':
-          case '2':
-          case '3':
-          case '4':
-          case '5':
-            currentPage = kpd.key[i].kchar - '1';
-            forceUpdate = true;
-            break;
-          case 'a':
-          case 'b':
-          case 'c':
-          case 'd':
-          case 'e':
-            OSCMessage macroMsg("/eos/macro/fire");
-            macroMsg.add(700+kpd.key[i].kchar-'a');
-            SLIPSerial.beginPacket();
-            macroMsg.send(SLIPSerial);
-            SLIPSerial.endPacket();
-            delay(200);
-            break;
+    for (int i = 0; i < LIST_MAX; i++) {
+      if (kpd.key[i].stateChanged && kpd.key[i].kstate == RELEASED) {
+        if (selectMode) {
+          switch (kpd.key[i].kchar) {
+            case '1':
+            case '2':
+            case '3':
+            case '4':
+            case '5':
+              currentPage = kpd.key[i].kchar - '1';
+              forceUpdate = true;
+              break;
+            case 'a':
+              readDevice();
+              selectMode = false;
+              forceUpdate = true;
+              lcd.clear();
+              break;
+            case 'c':
+              lcd.clear();
+              printMessage(0, 0, "Writing file...", false);
+              writeDevice();
+              lcd.clear();
+              selectMode = false;
+              forceUpdate = true;
+              break;
+          }
+        } else {
+          switch (kpd.key[i].kchar) {
+            case '1':
+            case '2':
+            case '3':
+            case '4':
+            case '5':
+              if (kpd.key[kpd.findInList('e')].kstate == HOLD) {
+                selectMode = true;
+                forceUpdate = true;
+              } else {
+                currentPage = kpd.key[i].kchar - '1';
+                forceUpdate = true;
+              }
+              break;
+            case 'a':
+            case 'b':
+            case 'c':
+            case 'd':
+            case 'e':
+              OSCMessage macroMsg("/eos/macro/fire");
+              macroMsg.add(700 + kpd.key[i].kchar - 'a');
+              SLIPSerial.beginPacket();
+              macroMsg.send(SLIPSerial);
+              SLIPSerial.endPacket();
+              delay(200);
+              break;
+          }
         }
       }
     }
   }
 
-  // if (!digitalRead(M1PIN)) {
-  //   OSCMessage wheelMsg("/eos/macro/fire");
-  //   wheelMsg.add(701);
-  //   SLIPSerial.beginPacket();
-  //   wheelMsg.send(SLIPSerial);
-  //   SLIPSerial.endPacket();
-  //   delay(200);
-  // }
-  // if (!digitalRead(M2PIN)) {
-  //   OSCMessage wheelMsg("/eos/macro/fire");
-  //   wheelMsg.add(702);
-  //   SLIPSerial.beginPacket();
-  //   wheelMsg.send(SLIPSerial);
-  //   SLIPSerial.endPacket();
-  //   delay(200);
-  // }
-  // if (!digitalRead(M3PIN)) {
-  //   OSCMessage wheelMsg("/eos/macro/fire");
-  //   wheelMsg.add(703);
-  //   SLIPSerial.beginPacket();
-  //   wheelMsg.send(SLIPSerial);
-  //   SLIPSerial.endPacket();
-  //   delay(200);
-  // }
   if (!digitalRead(W1PIN)) {
-    wheelClickSpeed[0]++;
-    if (wheelClickSpeed[0] > 5) wheelClickSpeed[0] = 1;
-    printWheelClickSpeed(0);
-    delay(200);
   }
   if (!digitalRead(W2PIN)) {
-    wheelClickSpeed[1]++;
-    if (wheelClickSpeed[1] > 5) wheelClickSpeed[1] = 1;
-    printWheelClickSpeed(1);
-    delay(200);
   }
   if (!digitalRead(W3PIN)) {
-    wheelClickSpeed[2]++;
-    if (wheelClickSpeed[2] > 5) wheelClickSpeed[2] = 1;
-    printWheelClickSpeed(2);
-    delay(200);
   }
   if (!digitalRead(W4PIN)) {
-    wheelClickSpeed[3]++;
-    if (wheelClickSpeed[3] > 5) wheelClickSpeed[3] = 1;
-    printWheelClickSpeed(3);
-    delay(200);
   }
-  // if (!digitalRead(UPPIN)) {
-  //   forceUpdate = true;
-
-  //   if (currentPage < 4) {
-  //     currentPage++;
-  //   }
-  // } else if (!digitalRead(DOWNPIN)) {
-  //   forceUpdate = true;
-
-  //   if (currentPage > 0) {
-  //     currentPage--;
-  //   }
-  // }
 
   //
-  // Select wheels for current page
-  if (!digitalRead(SELECTPIN)) {
-    // forceUpdate = true;
-    // updatePageConfig = true;
-    // for (int w = 0; w < NUMWHEELS; w++) {
-    //   long wheelin = wheels[w]->read();
-    //   if (wheelin != wheelPos[w]) {
-    //     pages[currentPage].activeWheels[w].num += wheelin > wheelPos[w] ? 1 : -1;
-    //     strncpy(pages[currentPage].activeWheels[w].name, allWheelNames[pages[currentPage].activeWheels[w].num], NSIZE);
-    //     wheelPos[w] = wheelin;
-    //   }
-    //   printWheelSelect(w);
-    // }
+  // Select encoders for current page
+  if (selectMode) {
+    forceUpdate = true;
+    for (int w = 0; w < NUMWHEELS; w++) {
+      long wheelin = encoders[w]->getValue();
+      if (wheelin != wheelPos[w]) {
+        config.pages[currentPage].activeWheels[w].num += wheelin > wheelPos[w] ? 1 : -1;
+        if (config.pages[currentPage].activeWheels[w].num < 1) config.pages[currentPage].activeWheels[w].num = 1;
+        if (config.pages[currentPage].activeWheels[w].num > SUPPORTEDWHEELS) config.pages[currentPage].activeWheels[w].num = SUPPORTEDWHEELS;
+        strncpy(config.pages[currentPage].activeWheels[w].name, allWheelNames[config.pages[currentPage].activeWheels[w].num], NSIZE);
+        wheelPos[w] = wheelin;
+      }
+      printWheelSelect(w);
+    }
     delay(100);
   } else {
     // Check for incoming OSC messages
     size = SLIPSerial.available();
-    if (size > 0)
-    {
+    if (size > 0) {
       // Fill the msg with all of the available bytes
       while (size--) {
-        curMsg = (char*)realloc(curMsg, i + size + 1);
+        curMsg = (char *)realloc(curMsg, i + size + 1);
         curMsg[i] = (char)(SLIPSerial.read());
         if (curMsg[i] == -1) {
           curMsg[i] = 0;
-          // TODO disp[1]->println("ERROR!");
-          // TODO disp[1]->display();
+          printMessage(0, 2, "Serial Error", false);
           break;
         }
         i++;
@@ -498,31 +481,24 @@ void loop()
         i = 0;
       }
     }
-    if (updatePageConfig) {
-      writeDevice();
-      updatePageConfig = false;
-    }
     if (forceUpdate) {
       for (int w = 0; w < NUMWHEELS; w++) {
         printWheelName(w);
-        printWheelClickSpeed(w);
       }
       OSCMessage wheelMsg("/eos/reset");
       SLIPSerial.beginPacket();
       wheelMsg.send(SLIPSerial);
       SLIPSerial.endPacket();
       forceUpdate = false;
-
     }
     for (int w = 0; w < NUMWHEELS; w++) {
-      long wheelin = wheels[w]->read();
+      long wheelin = encoders[w]->getValue();
       if (wheelin != wheelPos[w]) {
-        if (pages[currentPage].activeWheels[w].name[0] != 0) {
+        if (config.pages[currentPage].activeWheels[w].name[0] != 0) {
           char addr[80] = "/eos/wheel/";
-          strncat(addr, pages[currentPage].activeWheels[w].name, sizeof(pages[currentPage].activeWheels[w].name) - 11);
+          strncat(addr, config.pages[currentPage].activeWheels[w].name, sizeof(config.pages[currentPage].activeWheels[w].name) - 11);
           OSCMessage wheelMsg(addr);
-          //wheelMsg.add(wheelin > wheelPos[w] ? 1.0 : -1.0);
-          wheelMsg.add(wheelin > wheelPos[w] ? (wheelClickSpeed[w]) : -1.0 * (wheelClickSpeed[w]));
+          wheelMsg.add(wheelin > wheelPos[w] ? 1.0 : -1.0);
           SLIPSerial.beginPacket();
           wheelMsg.send(SLIPSerial);
           SLIPSerial.endPacket();
@@ -532,4 +508,3 @@ void loop()
     }
   }
 }
-
