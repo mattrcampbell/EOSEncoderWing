@@ -1,4 +1,3 @@
-#define SELECTPIN 0
 #define W1PIN     6
 #define W2PIN     7
 #define W3PIN     8
@@ -7,6 +6,8 @@
 #define NUMWHEELS 4
 #define NSIZE     80
 #define NPAGES    5
+#define ENCREADS 10000
+
 // Active wheel structure stores the currently selected wheel name/number
 struct activeWheel {
   char name[NSIZE] = "Intens";

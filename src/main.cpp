@@ -24,6 +24,10 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <string.h>
+#include <Bounce2.h>
+
+// #define CIRCULAR_BUFFER_INT_SAFE
+// #include <CircularBuffer.h>
 
 #include "header.h"
 
@@ -49,6 +53,7 @@ long wheelPos[NUMWHEELS];
 char currentDevice[NSIZE];
 char fileName[12];
 int line = 0;
+float ticks[NUMWHEELS];
 boolean forceUpdate = false;
 boolean selectMode = false;
 boolean handshakeCompete = false;
@@ -59,19 +64,26 @@ LiquidCrystal_I2C lcd(0x27, 40, 2);
 EncoderTool::Encoder *encoders[NUMWHEELS];
 EncoderTool::Encoder enc1, enc2, enc3, enc4;
 
+Bounce knobButtons[NUMWHEELS];
+
+struct wheelEntry {
+  uint32_t readTime;
+  int ticks;
+};
+wheelEntry wheelEntries[ENCREADS];
+int curEntry = 0;
+
 void setup() {
   Serial1.begin(115200);
-  pinMode(SELECTPIN, INPUT_PULLUP);
-  pinMode(W1PIN, INPUT_PULLUP);
-  pinMode(W2PIN, INPUT_PULLUP);
-  pinMode(W3PIN, INPUT_PULLUP);
-  pinMode(W4PIN, INPUT_PULLUP);
-
   for (int i = 0; i < NUMWHEELS; i++) {
-    // pages[currentPage].activeWheels[i].name[0] = '\0';
-    allWheelNames[i][0] = '\0';
     wheelPos[i] = -999;
+    ticks[i] = 1.0;
   }
+  knobButtons[0].attach(W1PIN, INPUT_PULLUP);
+  knobButtons[1].attach(W2PIN, INPUT_PULLUP);
+  knobButtons[2].attach(W3PIN, INPUT_PULLUP);
+  knobButtons[3].attach(W4PIN, INPUT_PULLUP);
+
   lcd.init();  // initialize the lcd
   lcd.backlight();
   lcd.clear();
@@ -151,10 +163,6 @@ void writeDevice() {
   char fn[12];
   sprintf(fn, "%d.txt", findFileName());
   saveConfiguration(fn, config);
-  // SD.remove(fn);
-  // File dataFile = SD.open(fn, FILE_WRITE);
-  // dataFile.write((const uint8_t *)&pages, sizeof(pages));
-  // dataFile.close();
 }
 
 boolean readDevice() {
@@ -163,9 +171,6 @@ boolean readDevice() {
   if (!SD.exists(fn)) {
     return false;
   }
-  // File dataFile = SD.open(fn);
-  // dataFile.read((uint8_t *)&pages, sizeof(pages));
-  // dataFile.close();
   loadConfiguration(fn, config);
   return true;
 }
@@ -173,10 +178,6 @@ boolean readDevice() {
 // Loads the configuration from a file
 void loadConfiguration(const char *filename, Config &config) {
   File file = SD.open(filename);
-
-  // Allocate a temporary JsonDocument
-  // Don't forget to change the capacity to match your requirements.
-  // Use https://arduinojson.org/v6/assistant to compute the capacity.
   StaticJsonDocument<1024> doc;
 
   // Deserialize the JSON document
@@ -206,10 +207,6 @@ void saveConfiguration(const char *filename, const Config &config) {
     Serial.println(F("Failed to create file"));
     return;
   }
-
-  // Allocate a temporary JsonDocument
-  // Don't forget to change the capacity to match your requirements.
-  // Use https://arduinojson.org/assistant to compute the capacity.
   StaticJsonDocument<1024> doc;
 
   for (int p = 0; p < NPAGES; p++) {
@@ -251,7 +248,7 @@ void wheelMessage(OSCMessage &msg, int addressOffset) {
   // Get the wheel address
   msg.getAddress(tmp, addressOffset + 1);
 
-  int wheelNum = atoi(tmp) - 1;
+  int wheelNum = atoi(tmp);
 
   for (int i = 0; i < NUMWHEELS; i++) {
     if (strncmp(config.pages[currentPage].activeWheels[i].name, dev, NSIZE) == 0) {
@@ -279,7 +276,18 @@ void chanMessage(OSCMessage &msg, int addressOffset) {
     return;
   }
 
-  sscanf(tmp, "%*s [%*d] %*s %[^@ ]", dev);
+  //sscanf(tmp, "%*s [%*d] %*s %[^@ ]", dev);
+
+  char *token = strtok(tmp, " ");
+
+   while (token != NULL) {
+      // lcd.setCursor(0,0);
+      // lcd.clear();
+      // lcd.println(token);
+      token=strtok(NULL, " ");
+      if(strstr(token,"@")) break;
+      strncpy(dev,token,length);
+   }
 
   if (strncmp(currentDevice, dev, NSIZE) != 0) {
     currentPage = 0;
@@ -289,8 +297,6 @@ void chanMessage(OSCMessage &msg, int addressOffset) {
         setWheelName(i, "Intens", 1);
         printWheelName(i);
       }
-
-      // writeDevice();
     }
     forceUpdate = true;
   }
@@ -324,6 +330,7 @@ int parseOSCMessage(char *msg, int len) {
   }
   return 0;
 }
+
 void printMessage(int row, int slot, const char *msg, boolean center = true) {
   lcd.setCursor(slot * 10, row);
   lcd.print("          ");
@@ -366,6 +373,15 @@ void printWheelSelect(int num) {
     printMessage(0,num,"ERROR", true);
   }
 }
+
+void rateUpdateCheck( int num ){
+  knobButtons[num].update();
+  if ( knobButtons[num].fell() ) {
+    ticks[num]++;
+  }
+  if(ticks[num] > 5.0) ticks[num] = 1.0;
+}
+
 void loop() {
   static char *curMsg;
   static int i;
@@ -430,32 +446,29 @@ void loop() {
       }
     }
   }
-
-  if (!digitalRead(W1PIN)) {
-  }
-  if (!digitalRead(W2PIN)) {
-  }
-  if (!digitalRead(W3PIN)) {
-  }
-  if (!digitalRead(W4PIN)) {
-  }
-
   //
   // Select encoders for current page
   if (selectMode) {
-    forceUpdate = true;
     for (int w = 0; w < NUMWHEELS; w++) {
       long wheelin = encoders[w]->getValue();
       if (wheelin != wheelPos[w]) {
+        forceUpdate = true;
         config.pages[currentPage].activeWheels[w].num += wheelin > wheelPos[w] ? 1 : -1;
         if (config.pages[currentPage].activeWheels[w].num < 1) config.pages[currentPage].activeWheels[w].num = 1;
         if (config.pages[currentPage].activeWheels[w].num > SUPPORTEDWHEELS) config.pages[currentPage].activeWheels[w].num = SUPPORTEDWHEELS;
         strncpy(config.pages[currentPage].activeWheels[w].name, allWheelNames[config.pages[currentPage].activeWheels[w].num], NSIZE);
         wheelPos[w] = wheelin;
       }
-      printWheelSelect(w);
+      
     }
-    delay(100);
+    if (forceUpdate) {
+      for (int w = 0; w < NUMWHEELS; w++) {
+        printWheelSelect(w);
+        forceUpdate = false;
+      }
+      lcd.setCursor(0,1);
+      lcd.print(currentPage);
+    }
   } else {
     // Check for incoming OSC messages
     size = SLIPSerial.available();
@@ -492,13 +505,24 @@ void loop() {
       forceUpdate = false;
     }
     for (int w = 0; w < NUMWHEELS; w++) {
+      rateUpdateCheck(w);
       long wheelin = encoders[w]->getValue();
       if (wheelin != wheelPos[w]) {
+        uint32_t curTime = micros();
+        wheelEntries[curEntry] = wheelEntry{curTime, wheelPos[w]-wheelin};
+        curEntry++;
+        if(curEntry >= ENCREADS) curEntry = 0;
+        float total = 0;
+        for (int i = 0; i < ENCREADS; i++) {
+          if( wheelEntries[i].readTime > curTime-50000){
+            total += wheelEntries[i].ticks;
+          }
+        }
         if (config.pages[currentPage].activeWheels[w].name[0] != 0) {
-          char addr[80] = "/eos/wheel/";
-          strncat(addr, config.pages[currentPage].activeWheels[w].name, sizeof(config.pages[currentPage].activeWheels[w].name) - 11);
+          char addr[80] = "/eos/wheel/coarse/";
+          strncat(addr, config.pages[currentPage].activeWheels[w].name, sizeof(config.pages[currentPage].activeWheels[w].name) - 18);
           OSCMessage wheelMsg(addr);
-          wheelMsg.add(wheelin > wheelPos[w] ? 1.0 : -1.0);
+          wheelMsg.add(total*-1);
           SLIPSerial.beginPacket();
           wheelMsg.send(SLIPSerial);
           SLIPSerial.endPacket();
