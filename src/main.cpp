@@ -53,7 +53,6 @@ long wheelPos[NUMWHEELS];
 char currentDevice[NSIZE];
 char fileName[12];
 int line = 0;
-float ticks[NUMWHEELS];
 boolean forceUpdate = false;
 boolean selectMode = false;
 boolean handshakeCompete = false;
@@ -77,7 +76,6 @@ void setup() {
   Serial1.begin(115200);
   for (int i = 0; i < NUMWHEELS; i++) {
     wheelPos[i] = -999;
-    ticks[i] = 1.0;
   }
   knobButtons[0].attach(W1PIN, INPUT_PULLUP);
   knobButtons[1].attach(W2PIN, INPUT_PULLUP);
@@ -374,12 +372,16 @@ void printWheelSelect(int num) {
   }
 }
 
-void rateUpdateCheck( int num ){
+void knobCheck( int num ){
   knobButtons[num].update();
   if ( knobButtons[num].fell() ) {
-    ticks[num]++;
+    char addr[80];
+    sprintf(addr, "/eos/param/%s/home", config.pages[currentPage].activeWheels[num].name);
+    OSCMessage wheelMsg(addr);
+    SLIPSerial.beginPacket();
+    wheelMsg.send(SLIPSerial);
+    SLIPSerial.endPacket();
   }
-  if(ticks[num] > 5.0) ticks[num] = 1.0;
 }
 
 void loop() {
@@ -505,7 +507,7 @@ void loop() {
       forceUpdate = false;
     }
     for (int w = 0; w < NUMWHEELS; w++) {
-      rateUpdateCheck(w);
+      knobCheck(w);
       long wheelin = encoders[w]->getValue();
       if (wheelin != wheelPos[w]) {
         uint32_t curTime = micros();
