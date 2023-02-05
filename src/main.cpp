@@ -65,9 +65,12 @@ EncoderTool::Encoder enc1, enc2, enc3, enc4;
 
 Bounce knobButtons[NUMWHEELS];
 
+const String HANDSHAKE_QUERY = "ETCOSC?";
+const String HANDSHAKE_REPLY = "OK";
+
 struct wheelEntry {
-  uint32_t readTime;
-  int ticks;
+  uint32_t readTime = 0;
+  int ticks = 0;
 };
 wheelEntry wheelEntries[ENCREADS];
 int curEntry = 0;
@@ -88,8 +91,7 @@ void setup() {
 
   SLIPSerial.begin(115200);
   // This is a hack around an arduino bug. It was taken from the OSC library examples
-  //while (!Serial)
-  // ;
+  //while (!Serial);
 
   // this is necessary for reconnecting a device because it need some timme for the serial port to get open, but meanwhile the handshake message was send from eos
   SLIPSerial.beginPacket();
@@ -176,7 +178,7 @@ boolean readDevice() {
 // Loads the configuration from a file
 void loadConfiguration(const char *filename, Config &config) {
   File file = SD.open(filename);
-  StaticJsonDocument<1024> doc;
+  StaticJsonDocument<2048> doc;
 
   // Deserialize the JSON document
   DeserializationError error = deserializeJson(doc, file);
@@ -205,7 +207,7 @@ void saveConfiguration(const char *filename, const Config &config) {
     Serial.println(F("Failed to create file"));
     return;
   }
-  StaticJsonDocument<1024> doc;
+  StaticJsonDocument<2048> doc;
 
   for (int p = 0; p < NPAGES; p++) {
     for (int w = 0; w < NUMWHEELS; w++) {
@@ -258,6 +260,11 @@ void wheelMessage(OSCMessage &msg, int addressOffset) {
   strncpy(allWheelNames[wheelNum], dev, NSIZE);
 }
 
+void displayNoChannel(){
+  lcd.clear();
+  printMessage(0,0,"No channel currently selected.",false);
+}
+
 void chanMessage(OSCMessage &msg, int addressOffset) {
   int length = msg.getDataLength(0);
   if (length == 0) {
@@ -300,33 +307,58 @@ void chanMessage(OSCMessage &msg, int addressOffset) {
   }
 }
 
-int parseOSCMessage(char *msg, int len) {
-  //  check to see if this is the handshake string
-  if (strstr(msg, "ETCOSC?")) {
-    printMessage(1, 0, "Handshake Complete!", false);
+// int parseOSCMessage(char *msg, int len) {
+//   //  check to see if this is the handshake string
+//   if (strstr(msg, "ETCOSC?")) {
+//     printMessage(1, 0, "Handshake Complete! Select a channel...", false);
+//     SLIPSerial.beginPacket();
+//     SLIPSerial.write((const uint8_t *)"OK", 2);
+//     SLIPSerial.endPacket();
+//     SLIPSerial.flush();
+//     handshakeCompete = true;
+//     return 1;
+//   } else {
+//     OSCMessage OSCin;
+//     for (int i = 0; i < len; i++) {
+//       char c = msg[i];
+//       OSCin.fill((uint8_t)c);
+//     }
+//     if (!OSCin.hasError()) {
+//       OSCin.route("/eos/out/active/wheel", wheelMessage);
+//       OSCin.route("/eos/out/active/chan", chanMessage);
+//     } else {
+//       char m[20];
+//       sprintf(m, "OSC Error [%d]", OSCin.getError());
+//       printMessage(0, 0, m, false);
+//     }
+//     return 1;
+//   }
+//   return 0;
+// }
+void parseOSCMessage(String& msg)
+{
+  // check to see if this is the handshake string
+  if (msg.indexOf(HANDSHAKE_QUERY) != -1){
+    // handshake string found!
     SLIPSerial.beginPacket();
-    SLIPSerial.write((const uint8_t *)"OK", 2);
+    SLIPSerial.write((const uint8_t*)HANDSHAKE_REPLY.c_str(), (size_t)HANDSHAKE_REPLY.length());
     SLIPSerial.endPacket();
-    SLIPSerial.flush();
-    handshakeCompete = true;
-    return 1;
+
+    // An Eos would do nothing until subscribed
+    // Let Eos know we want updates on some things
+    //issueEosSubscribes();
+
   } else {
-    OSCMessage OSCin;
-    for (int i = 0; i < len; i++) {
-      char c = msg[i];
-      OSCin.fill((uint8_t)c);
-    }
-    if (!OSCin.hasError()) {
-      OSCin.route("/eos/out/active/wheel", wheelMessage);
-      OSCin.route("/eos/out/active/chan", chanMessage);
-    } else {
-      char m[20];
-      sprintf(m, "OSC Error [%d]", OSCin.getError());
-      printMessage(0, 0, m, false);
-    }
-    return 1;
+    // prepare the message for routing by filling an OSCMessage object with our message string
+    OSCMessage oscmsg;
+    oscmsg.fill((uint8_t*)msg.c_str(), (int)msg.length());
+
+    // Try the various OSC routes
+    if (oscmsg.route("/eos/out/active/wheel", wheelMessage))
+      return;
+    if (oscmsg.route("/eos/out/active/chan", chanMessage))
+      return;
   }
-  return 0;
 }
 
 void printMessage(int row, int slot, const char *msg, boolean center = true) {
@@ -385,7 +417,7 @@ void knobCheck( int num ){
 }
 
 void loop() {
-  static char *curMsg;
+  static String curMsg;
   static int i;
   int size;
   if (kpd.getKeys()) {
@@ -474,43 +506,56 @@ void loop() {
   } else {
     // Check for incoming OSC messages
     size = SLIPSerial.available();
-    if (size > 0) {
+    // if (size > 0) {
+    //   // Fill the msg with all of the available bytes
+    //   while (size--) {
+    //     curMsg = (char *)realloc(curMsg, i + size + 1);
+    //     curMsg[i] = (char)(SLIPSerial.read());
+    //     if (curMsg[i] == -1) {
+    //       curMsg[i] = 0;
+    //       printMessage(0, 2, "Serial Error", false);
+    //       break;
+    //     }
+    //     i++;
+    //   }
+    // }
+    if (size > 0){
       // Fill the msg with all of the available bytes
-      while (size--) {
-        curMsg = (char *)realloc(curMsg, i + size + 1);
-        curMsg[i] = (char)(SLIPSerial.read());
-        if (curMsg[i] == -1) {
-          curMsg[i] = 0;
-          printMessage(0, 2, "Serial Error", false);
-          break;
-        }
-        i++;
+      while (size--){
+        curMsg += (char)(SLIPSerial.read());
       }
     }
-
     // Check if message is complete and parse.
     if (SLIPSerial.endofPacket()) {
-      if (parseOSCMessage(curMsg, i)) {
-        free(curMsg);
-        curMsg = NULL;
-        i = 0;
-      }
+      //if (parseOSCMessage(curMsg, i)) {
+        //free(curMsg);
+        //curMsg = NULL;
+        //i = 0;
+      //}
+      parseOSCMessage(curMsg);
+      curMsg = String();
     }
     if (forceUpdate) {
-      for (int w = 0; w < NUMWHEELS; w++) {
-        printWheelName(w);
+      if(strcmp(currentDevice,"") == 0){
+            displayNoChannel();
+      } else {
+        for (int w = 0; w < NUMWHEELS; w++) {
+          printWheelName(w);
+        }
+        OSCMessage wheelMsg("/eos/reset");
+        SLIPSerial.beginPacket();
+        wheelMsg.send(SLIPSerial);
+        SLIPSerial.endPacket();
       }
-      OSCMessage wheelMsg("/eos/reset");
-      SLIPSerial.beginPacket();
-      wheelMsg.send(SLIPSerial);
-      SLIPSerial.endPacket();
+      
       forceUpdate = false;
     }
+    uint32_t curTime = micros();
     for (int w = 0; w < NUMWHEELS; w++) {
       knobCheck(w);
       long wheelin = encoders[w]->getValue();
       if (wheelin != wheelPos[w]) {
-        uint32_t curTime = micros();
+        
         wheelEntries[curEntry] = wheelEntry{curTime, wheelPos[w]-wheelin};
         curEntry++;
         if(curEntry >= ENCREADS) curEntry = 0;
@@ -518,11 +563,15 @@ void loop() {
         for (int i = 0; i < ENCREADS; i++) {
           if( wheelEntries[i].readTime > curTime-50000){
             total += wheelEntries[i].ticks;
+          } else {
+            wheelEntries[i].ticks = 0;
           }
         }
         if (config.pages[currentPage].activeWheels[w].name[0] != 0) {
           char addr[80] = "/eos/wheel/coarse/";
-          strncat(addr, config.pages[currentPage].activeWheels[w].name, sizeof(config.pages[currentPage].activeWheels[w].name) - 18);
+          String wheelName = config.pages[currentPage].activeWheels[w].name;
+          wheelName.replace("/","\\");
+          strncat(addr, wheelName.c_str(), wheelName.length() - 18);
           OSCMessage wheelMsg(addr);
           wheelMsg.add(total*-1);
           SLIPSerial.beginPacket();
@@ -532,5 +581,10 @@ void loop() {
         wheelPos[w] = wheelin;
       }
     }
+    for (int i = 0; i < ENCREADS; i++) {
+          if( wheelEntries[i].readTime < curTime-50000){
+            wheelEntries[i].ticks = 0;
+          }
+        }
   }
 }
