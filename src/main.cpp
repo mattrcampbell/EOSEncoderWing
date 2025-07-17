@@ -13,7 +13,7 @@
 #include <Bounce2.h>
 #include <EncoderTool.h>
 #include <Keypad.h>
-#include <LiquidCrystal_I2C.h>
+#include <LCD_I2C.h>
 #include <OSCBoards.h>
 #include <OSCBundle.h>
 #include <OSCData.h>
@@ -31,13 +31,11 @@
 
 #include "header.h"
 
-const byte ROWS = 5;  // four rows
-const byte COLS = 2;  // three columns
-char keys[ROWS][COLS] = {
-    {'a', '1'}, {'b', '2'}, {'c', '3'}, {'d', '4'}, {'e', '5'}};
-byte rowPins[ROWS] = {33, 34, 35, 36,
-                      37};      // connect to the row pinouts of the kpd
-byte colPins[COLS] = {39, 38};  // connect to the column pinouts of the kpd
+const byte ROWS = 5; // four rows
+const byte COLS = 2; // three columns
+char keys[ROWS][COLS] = {{'a', '1'}, {'b', '2'}, {'c', '3'}, {'d', '4'}, {'e', '5'}};
+byte rowPins[ROWS] = {33, 34, 35, 36, 37}; // connect to the row pinouts of the kpd
+byte colPins[COLS] = {39, 38};             // connect to the column pinouts of the kpd
 
 Keypad kpd = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
@@ -55,7 +53,7 @@ boolean selectMode = false;
 boolean handshakeComplete = false;
 
 SLIPEncodedUSBSerial SLIPSerial(thisBoardsSerialUSB);
-LiquidCrystal_I2C lcd(0x27, 40, 2);
+LCD_I2C lcd(0x27, 40, 2);
 
 EncoderTool::Encoder *encoders[NUMWHEELS];
 EncoderTool::Encoder enc1, enc2, enc3, enc4;
@@ -82,7 +80,7 @@ void setup() {
   knobButtons[2].attach(W3PIN, INPUT_PULLUP);
   knobButtons[3].attach(W4PIN, INPUT_PULLUP);
 
-  lcd.init();  // initialize the lcd
+  lcd.begin(); // initialize the lcd
   lcd.backlight();
   lcd.clear();
 
@@ -120,14 +118,15 @@ void setup() {
 bool readLine(File &f, char *line, size_t maxLen) {
   for (size_t n = 0; n < maxLen; n++) {
     int c = f.read();
-    if (c < 0 && n == 0) return false;  // EOF
+    if (c < 0 && n == 0)
+      return false; // EOF
     if (c < 0 || c == '\n') {
       line[n] = '\0';
       return true;
     }
     line[n] = c;
   }
-  return false;  // line too long
+  return false; // line too long
 }
 
 int findFileName() {
@@ -184,8 +183,7 @@ void loadConfiguration(const char *filename, Config &config) {
   // Deserialize the JSON document
   DeserializationError error = deserializeJson(doc, file);
   if (error)
-    slotMessage(1, 0, "Failed to read file, using default configuration",
-                false);
+    slotMessage(1, 0, "Failed to read file, using default configuration", false);
 
   for (int p = 0; p < NPAGES; p++) {
     for (int w = 0; w < NUMWHEELS; w++) {
@@ -225,13 +223,13 @@ void saveConfiguration(const char *filename, const Config &config) {
 
 int getPadding(int size, const char *msg) {
   int padlen = (size - strlen(msg)) / 2;
-  if (padlen > size || padlen < 0) padlen = 0;
+  if (padlen > size || padlen < 0)
+    padlen = 0;
   return padlen;
 }
 
 void setWheelName(int num, const char *name, int wNum) {
-  strncpy(config.pages[currentPage].activeWheels[num].name, name,
-          sizeof(config.pages[currentPage].activeWheels[num].name));
+  strncpy(config.pages[currentPage].activeWheels[num].name, name, sizeof(config.pages[currentPage].activeWheels[num].name));
   config.pages[currentPage].activeWheels[num].num = wNum;
 }
 
@@ -250,15 +248,14 @@ void wheelMessage(OSCMessage &msg, int addressOffset) {
   };
   sscanf(tmp, "%[^[][%d", dev, &value);
 
-  dev[strlen(dev) - 2] = 0;  // Remove the spaces
+  dev[strlen(dev) - 2] = 0; // Remove the spaces
 
   // Get the wheel address
   msg.getAddress(tmp, addressOffset + 1);
   int wheelNum = atoi(tmp);
 
   for (int i = 0; i < NUMWHEELS; i++) {
-    if (strncmp(config.pages[currentPage].activeWheels[i].name, dev, NSIZE) ==
-        0) {
+    if (strncmp(config.pages[currentPage].activeWheels[i].name, dev, NSIZE) == 0) {
       printWheelValue(i, value);
     }
   }
@@ -268,7 +265,7 @@ void wheelMessage(OSCMessage &msg, int addressOffset) {
 
 void displayNoChannel() {
   lcd.clear();
-  slotMessage(0, 0, "No channel currently selected.", false);
+  printMessage(0, "No channel currently selected.", true);
 }
 
 void chanMessage(OSCMessage &msg, int addressOffset) {
@@ -296,7 +293,8 @@ void chanMessage(OSCMessage &msg, int addressOffset) {
     // lcd.clear();
     // lcd.println(token);
     token = strtok(NULL, " ");
-    if (strstr(token, "@")) break;
+    if (strstr(token, "@"))
+      break;
     strncpy(dev, token, length);
   }
 
@@ -318,8 +316,7 @@ void parseOSCMessage(String &msg) {
   if (msg.indexOf(HANDSHAKE_QUERY) != -1) {
     // handshake string found!
     SLIPSerial.beginPacket();
-    SLIPSerial.write((const uint8_t *)HANDSHAKE_REPLY.c_str(),
-                     (size_t)HANDSHAKE_REPLY.length());
+    SLIPSerial.write((const uint8_t *)HANDSHAKE_REPLY.c_str(), (size_t)HANDSHAKE_REPLY.length());
     SLIPSerial.endPacket();
     handshakeComplete = true;
   } else {
@@ -329,8 +326,10 @@ void parseOSCMessage(String &msg) {
     oscmsg.fill((uint8_t *)msg.c_str(), (int)msg.length());
 
     // Try the various OSC routes
-    if (oscmsg.route("/eos/out/active/wheel", wheelMessage)) return;
-    if (oscmsg.route("/eos/out/active/chan", chanMessage)) return;
+    if (oscmsg.route("/eos/out/active/wheel", wheelMessage))
+      return;
+    if (oscmsg.route("/eos/out/active/chan", chanMessage))
+      return;
   }
 }
 
@@ -365,8 +364,7 @@ void printWheelName(int num) {
   lcd.print("          ");
   lcd.setCursor(num * 10, 0);
   int padlen = getPadding(10, config.pages[currentPage].activeWheels[num].name);
-  lcd.printf("%*s%s%*s", padlen, "",
-             config.pages[currentPage].activeWheels[num].name, padlen, "");
+  lcd.printf("%*s%s%*s", padlen, "", config.pages[currentPage].activeWheels[num].name, padlen, "");
 }
 
 void printWheelValue(int num, int value) {
@@ -382,8 +380,7 @@ void printWheelValue(int num, int value) {
 void printWheelSelect(int num) {
   if (config.pages[currentPage].activeWheels[num].num <= SUPPORTEDWHEELS) {
     char m[NSIZE + 2];
-    sprintf(m, "[%s]",
-            allWheelNames[config.pages[currentPage].activeWheels[num].num]);
+    sprintf(m, "[%s]", allWheelNames[config.pages[currentPage].activeWheels[num].num]);
     slotMessage(0, num, m, true);
     sprintf(m, "[%d]", config.pages[currentPage].activeWheels[num].num);
     slotMessage(1, num, m, true);
@@ -396,8 +393,7 @@ void knobCheck(int num) {
   knobButtons[num].update();
   if (knobButtons[num].fell()) {
     char addr[80];
-    sprintf(addr, "/eos/param/%s/home",
-            config.pages[currentPage].activeWheels[num].name);
+    sprintf(addr, "/eos/param/%s/home", config.pages[currentPage].activeWheels[num].name);
     OSCMessage wheelMsg(addr);
     SLIPSerial.beginPacket();
     wheelMsg.send(SLIPSerial);
@@ -414,56 +410,56 @@ void loop() {
       if (kpd.key[i].stateChanged && kpd.key[i].kstate == RELEASED) {
         if (selectMode) {
           switch (kpd.key[i].kchar) {
-            case '1':
-            case '2':
-            case '3':
-            case '4':
-            case '5':
-              currentPage = kpd.key[i].kchar - '1';
-              forceUpdate = true;
-              break;
-            case 'a':
-              readDevice();
-              selectMode = false;
-              forceUpdate = true;
-              lcd.clear();
-              break;
-            case 'c':
-              lcd.clear();
-              slotMessage(0, 0, "Writing file...", false);
-              writeDevice();
-              lcd.clear();
-              selectMode = false;
-              forceUpdate = true;
-              break;
+          case '1':
+          case '2':
+          case '3':
+          case '4':
+          case '5':
+            currentPage = kpd.key[i].kchar - '1';
+            forceUpdate = true;
+            break;
+          case 'a':
+            readDevice();
+            selectMode = false;
+            forceUpdate = true;
+            lcd.clear();
+            break;
+          case 'c':
+            lcd.clear();
+            slotMessage(0, 0, "Writing file...", false);
+            writeDevice();
+            lcd.clear();
+            selectMode = false;
+            forceUpdate = true;
+            break;
           }
         } else {
           switch (kpd.key[i].kchar) {
-            case '1':
-            case '2':
-            case '3':
-            case '4':
-            case '5':
-              if (kpd.key[kpd.findInList('e')].kstate == HOLD) {
-                selectMode = true;
-                forceUpdate = true;
-              } else {
-                currentPage = kpd.key[i].kchar - '1';
-                forceUpdate = true;
-              }
-              break;
-            case 'a':
-            case 'b':
-            case 'c':
-            case 'd':
-            case 'e':
-              OSCMessage macroMsg("/eos/macro/fire");
-              macroMsg.add(700 + kpd.key[i].kchar - 'a');
-              SLIPSerial.beginPacket();
-              macroMsg.send(SLIPSerial);
-              SLIPSerial.endPacket();
-              delay(200);
-              break;
+          case '1':
+          case '2':
+          case '3':
+          case '4':
+          case '5':
+            if (kpd.key[kpd.findInList('e')].kstate == HOLD) {
+              selectMode = true;
+              forceUpdate = true;
+            } else {
+              currentPage = kpd.key[i].kchar - '1';
+              forceUpdate = true;
+            }
+            break;
+          case 'a':
+          case 'b':
+          case 'c':
+          case 'd':
+          case 'e':
+            OSCMessage macroMsg("/eos/macro/fire");
+            macroMsg.add(700 + kpd.key[i].kchar - 'a');
+            SLIPSerial.beginPacket();
+            macroMsg.send(SLIPSerial);
+            SLIPSerial.endPacket();
+            delay(200);
+            break;
           }
         }
       }
@@ -476,15 +472,14 @@ void loop() {
       long wheelin = encoders[w]->getValue();
       if (wheelin != wheelPos[w]) {
         forceUpdate = true;
-        config.pages[currentPage].activeWheels[w].num +=
-            wheelin > wheelPos[w] ? 1 : -1;
-        if (config.pages[currentPage].activeWheels[w].num < 1)
+        config.pages[currentPage].activeWheels[w].num += wheelin > wheelPos[w] ? 1 : -1;
+        if (config.pages[currentPage].activeWheels[w].num < 1) {
           config.pages[currentPage].activeWheels[w].num = 1;
-        if (config.pages[currentPage].activeWheels[w].num > SUPPORTEDWHEELS)
+        }
+        if (config.pages[currentPage].activeWheels[w].num > SUPPORTEDWHEELS) {
           config.pages[currentPage].activeWheels[w].num = SUPPORTEDWHEELS;
-        strncpy(config.pages[currentPage].activeWheels[w].name,
-                allWheelNames[config.pages[currentPage].activeWheels[w].num],
-                NSIZE);
+        }
+        strncpy(config.pages[currentPage].activeWheels[w].name, allWheelNames[config.pages[currentPage].activeWheels[w].num], NSIZE);
         wheelPos[w] = wheelin;
       }
     }
@@ -499,19 +494,6 @@ void loop() {
   } else {
     // Check for incoming OSC messages
     size = SLIPSerial.available();
-    // if (size > 0) {
-    //   // Fill the msg with all of the available bytes
-    //   while (size--) {
-    //     curMsg = (char *)realloc(curMsg, i + size + 1);
-    //     curMsg[i] = (char)(SLIPSerial.read());
-    //     if (curMsg[i] == -1) {
-    //       curMsg[i] = 0;
-    //       slotMessage(0, 2, "Serial Error", false);
-    //       break;
-    //     }
-    //     i++;
-    //   }
-    // }
     if (size > 0) {
       // Fill the msg with all of the available bytes
       while (size--) {
@@ -520,11 +502,6 @@ void loop() {
     }
     // Check if message is complete and parse.
     if (SLIPSerial.endofPacket()) {
-      // if (parseOSCMessage(curMsg, i)) {
-      // free(curMsg);
-      // curMsg = NULL;
-      // i = 0;
-      //}
       parseOSCMessage(curMsg);
       curMsg = String();
     }
@@ -551,7 +528,8 @@ void loop() {
         if (wheelin != wheelPos[w]) {
           wheelEntries[curEntry] = wheelEntry{curTime, wheelPos[w] - wheelin};
           curEntry++;
-          if (curEntry >= ENCREADS) curEntry = 0;
+          if (curEntry >= ENCREADS)
+            curEntry = 0;
           float total = 0;
           for (int i = 0; i < ENCREADS; i++) {
             if (wheelEntries[i].readTime > curTime - 50000) {
