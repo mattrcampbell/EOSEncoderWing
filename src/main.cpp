@@ -8,6 +8,14 @@
 
    Revision 1
 
+   Don't forget to redefine VID and PID for the teensy in:
+   .platformio/packages/framework-arduinoteensy/cores/usb_desc.h
+
+   to:
+
+   #define VENDOR_ID             0x2341
+   #define PRODUCT_ID            0x0043
+
 */
 #include <ArduinoJson.h>
 #include <Bounce2.h>
