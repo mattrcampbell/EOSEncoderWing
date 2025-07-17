@@ -10,6 +10,7 @@
 
 */
 #include <ArduinoJson.h>
+#include <Bounce2.h>
 #include <EncoderTool.h>
 #include <Keypad.h>
 #include <LiquidCrystal_I2C.h>
@@ -24,7 +25,6 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <string.h>
-#include <Bounce2.h>
 
 // #define CIRCULAR_BUFFER_INT_SAFE
 // #include <CircularBuffer.h>
@@ -34,13 +34,10 @@
 const byte ROWS = 5;  // four rows
 const byte COLS = 2;  // three columns
 char keys[ROWS][COLS] = {
-    {'a', '1'},
-    {'b', '2'},
-    {'c', '3'},
-    {'d', '4'},
-    {'e', '5'}};
-byte rowPins[ROWS] = {33, 34, 35, 36, 37};  // connect to the row pinouts of the kpd
-byte colPins[COLS] = {39, 38};              // connect to the column pinouts of the kpd
+    {'a', '1'}, {'b', '2'}, {'c', '3'}, {'d', '4'}, {'e', '5'}};
+byte rowPins[ROWS] = {33, 34, 35, 36,
+                      37};      // connect to the row pinouts of the kpd
+byte colPins[COLS] = {39, 38};  // connect to the column pinouts of the kpd
 
 Keypad kpd = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
@@ -48,14 +45,14 @@ Config config;
 
 // page pages[5];
 int currentPage = 0;
-char allWheelNames[SUPPORTEDWHEELS][NSIZE];
+char allWheelNames[SUPPORTEDWHEELS][NSIZE + 1];
 long wheelPos[NUMWHEELS];
-char currentDevice[NSIZE];
+char currentDevice[NSIZE + 1];
 char fileName[12];
 int line = 0;
 boolean forceUpdate = false;
 boolean selectMode = false;
-boolean handshakeCompete = false;
+boolean handshakeComplete = false;
 
 SLIPEncodedUSBSerial SLIPSerial(thisBoardsSerialUSB);
 LiquidCrystal_I2C lcd(0x27, 40, 2);
@@ -90,19 +87,21 @@ void setup() {
   lcd.clear();
 
   SLIPSerial.begin(115200);
-  // This is a hack around an arduino bug. It was taken from the OSC library examples
-  //while (!Serial);
+  // This is a hack around an arduino bug. It was taken from the OSC library
+  // examples while (!Serial);
 
-  // this is necessary for reconnecting a device because it need some timme for the serial port to get open, but meanwhile the handshake message was send from eos
+  // this is necessary for reconnecting a device because it need some timme for
+  // the serial port to get open, but meanwhile the handshake message was send
+  // from eos
   SLIPSerial.beginPacket();
   SLIPSerial.write((const uint8_t *)"OK", 2);
   SLIPSerial.endPacket();
   delay(200);
 
   if (!SD.begin(BUILTIN_SDCARD)) {
-    printMessage(0, 3, "SD FAIL", false);
+    printMessage(0, "SD FAIL", true);
   } else {
-    printMessage(0, 3, "SD INIT", false);
+    printMessage(0, "SD INIT", true);
   }
 
   encoders[3] = &enc1;
@@ -114,6 +113,8 @@ void setup() {
   enc2.begin(30, 29);
   enc3.begin(28, 27);
   enc4.begin(26, 25);
+
+  printMessage(0, "Setup Complete", true);
 }
 
 bool readLine(File &f, char *line, size_t maxLen) {
@@ -183,7 +184,8 @@ void loadConfiguration(const char *filename, Config &config) {
   // Deserialize the JSON document
   DeserializationError error = deserializeJson(doc, file);
   if (error)
-    printMessage(1, 0, "Failed to read file, using default configuration", false);
+    slotMessage(1, 0, "Failed to read file, using default configuration",
+                false);
 
   for (int p = 0; p < NPAGES; p++) {
     for (int w = 0; w < NUMWHEELS; w++) {
@@ -221,48 +223,52 @@ void saveConfiguration(const char *filename, const Config &config) {
   file.close();
 }
 
-int getPadding(int size, const char *msg){
-    int padlen = (size - strlen(msg)) / 2;
-    if( padlen > size || padlen < 0) padlen = 0;
-    return padlen;
+int getPadding(int size, const char *msg) {
+  int padlen = (size - strlen(msg)) / 2;
+  if (padlen > size || padlen < 0) padlen = 0;
+  return padlen;
 }
 
 void setWheelName(int num, const char *name, int wNum) {
-  strncpy(config.pages[currentPage].activeWheels[num].name, name, sizeof(config.pages[currentPage].activeWheels[num].name));
+  strncpy(config.pages[currentPage].activeWheels[num].name, name,
+          sizeof(config.pages[currentPage].activeWheels[num].name));
   config.pages[currentPage].activeWheels[num].num = wNum;
 }
 
 void wheelMessage(OSCMessage &msg, int addressOffset) {
   int length = msg.getDataLength(0);
-  if (length == 0) {
+  if (length < 7) {
     return;
   }
   char tmp[length];
   char dev[length];
   int value;
-  msg.getString(0, tmp, length);
-
+  int res;
+  res = msg.getString(0, tmp, length);
+  if (res == -1 || res == (int)NULL) {
+    return;
+  };
   sscanf(tmp, "%[^[][%d", dev, &value);
+
   dev[strlen(dev) - 2] = 0;  // Remove the spaces
 
   // Get the wheel address
   msg.getAddress(tmp, addressOffset + 1);
-
   int wheelNum = atoi(tmp);
 
   for (int i = 0; i < NUMWHEELS; i++) {
-    if (strncmp(config.pages[currentPage].activeWheels[i].name, dev, NSIZE) == 0) {
+    if (strncmp(config.pages[currentPage].activeWheels[i].name, dev, NSIZE) ==
+        0) {
       printWheelValue(i, value);
     }
   }
-  Serial1.printf("msg %s\nl %d  d %s\n", msg, length, dev);
-
+  // Serial1.printf("msg %s\nl %d  d %s\n", msg, length, dev);
   strncpy(allWheelNames[wheelNum], dev, NSIZE);
 }
 
-void displayNoChannel(){
+void displayNoChannel() {
   lcd.clear();
-  printMessage(0,0,"No channel currently selected.",false);
+  slotMessage(0, 0, "No channel currently selected.", false);
 }
 
 void chanMessage(OSCMessage &msg, int addressOffset) {
@@ -281,18 +287,18 @@ void chanMessage(OSCMessage &msg, int addressOffset) {
     return;
   }
 
-  //sscanf(tmp, "%*s [%*d] %*s %[^@ ]", dev);
+  // sscanf(tmp, "%*s [%*d] %*s %[^@ ]", dev);
 
   char *token = strtok(tmp, " ");
 
-   while (token != NULL) {
-      // lcd.setCursor(0,0);
-      // lcd.clear();
-      // lcd.println(token);
-      token=strtok(NULL, " ");
-      if(strstr(token,"@")) break;
-      strncpy(dev,token,length);
-   }
+  while (token != NULL) {
+    // lcd.setCursor(0,0);
+    // lcd.clear();
+    // lcd.println(token);
+    token = strtok(NULL, " ");
+    if (strstr(token, "@")) break;
+    strncpy(dev, token, length);
+  }
 
   if (strncmp(currentDevice, dev, NSIZE) != 0) {
     currentPage = 0;
@@ -307,67 +313,47 @@ void chanMessage(OSCMessage &msg, int addressOffset) {
   }
 }
 
-// int parseOSCMessage(char *msg, int len) {
-//   //  check to see if this is the handshake string
-//   if (strstr(msg, "ETCOSC?")) {
-//     printMessage(1, 0, "Handshake Complete! Select a channel...", false);
-//     SLIPSerial.beginPacket();
-//     SLIPSerial.write((const uint8_t *)"OK", 2);
-//     SLIPSerial.endPacket();
-//     SLIPSerial.flush();
-//     handshakeCompete = true;
-//     return 1;
-//   } else {
-//     OSCMessage OSCin;
-//     for (int i = 0; i < len; i++) {
-//       char c = msg[i];
-//       OSCin.fill((uint8_t)c);
-//     }
-//     if (!OSCin.hasError()) {
-//       OSCin.route("/eos/out/active/wheel", wheelMessage);
-//       OSCin.route("/eos/out/active/chan", chanMessage);
-//     } else {
-//       char m[20];
-//       sprintf(m, "OSC Error [%d]", OSCin.getError());
-//       printMessage(0, 0, m, false);
-//     }
-//     return 1;
-//   }
-//   return 0;
-// }
-void parseOSCMessage(String& msg)
-{
+void parseOSCMessage(String &msg) {
   // check to see if this is the handshake string
-  if (msg.indexOf(HANDSHAKE_QUERY) != -1){
+  if (msg.indexOf(HANDSHAKE_QUERY) != -1) {
     // handshake string found!
     SLIPSerial.beginPacket();
-    SLIPSerial.write((const uint8_t*)HANDSHAKE_REPLY.c_str(), (size_t)HANDSHAKE_REPLY.length());
+    SLIPSerial.write((const uint8_t *)HANDSHAKE_REPLY.c_str(),
+                     (size_t)HANDSHAKE_REPLY.length());
     SLIPSerial.endPacket();
-
-    // An Eos would do nothing until subscribed
-    // Let Eos know we want updates on some things
-    //issueEosSubscribes();
-
+    handshakeComplete = true;
   } else {
-    // prepare the message for routing by filling an OSCMessage object with our message string
+    // prepare the message for routing by filling an OSCMessage object with our
+    // message string
     OSCMessage oscmsg;
-    oscmsg.fill((uint8_t*)msg.c_str(), (int)msg.length());
+    oscmsg.fill((uint8_t *)msg.c_str(), (int)msg.length());
 
     // Try the various OSC routes
-    if (oscmsg.route("/eos/out/active/wheel", wheelMessage))
-      return;
-    if (oscmsg.route("/eos/out/active/chan", chanMessage))
-      return;
+    if (oscmsg.route("/eos/out/active/wheel", wheelMessage)) return;
+    if (oscmsg.route("/eos/out/active/chan", chanMessage)) return;
   }
 }
 
-void printMessage(int row, int slot, const char *msg, boolean center = true) {
+void printMessage(int row, const char *msg, boolean center = true) {
+  lcd.setCursor(0, row);
+  lcd.print("                                        ");
+  lcd.setCursor(0, row);
+  if (center) {
+    int padlen = getPadding(40, msg);
+    // Serial1.printf("%d %d %d : %s\n",row, slot, padlen, msg);
+    lcd.printf("%*s%s%*s", padlen, "", msg, padlen, "");
+  } else {
+    lcd.print(msg);
+  }
+}
+
+void slotMessage(int row, int slot, const char *msg, boolean center = true) {
   lcd.setCursor(slot * 10, row);
   lcd.print("          ");
   lcd.setCursor(slot * 10, row);
   if (center) {
     int padlen = getPadding(10, msg);
-    Serial1.printf("%d %d %d : %s\n",row, slot, padlen, msg);
+    // Serial1.printf("%d %d %d : %s\n", row, slot, padlen, msg);
     lcd.printf("%*s%s%*s", padlen, "", msg, padlen, "");
   } else {
     lcd.print(msg);
@@ -379,7 +365,8 @@ void printWheelName(int num) {
   lcd.print("          ");
   lcd.setCursor(num * 10, 0);
   int padlen = getPadding(10, config.pages[currentPage].activeWheels[num].name);
-  lcd.printf("%*s%s%*s", padlen, "", config.pages[currentPage].activeWheels[num].name, padlen, "");
+  lcd.printf("%*s%s%*s", padlen, "",
+             config.pages[currentPage].activeWheels[num].name, padlen, "");
 }
 
 void printWheelValue(int num, int value) {
@@ -394,21 +381,23 @@ void printWheelValue(int num, int value) {
 
 void printWheelSelect(int num) {
   if (config.pages[currentPage].activeWheels[num].num <= SUPPORTEDWHEELS) {
-    char m[NSIZE+2];
-    sprintf(m,"[%s]", allWheelNames[config.pages[currentPage].activeWheels[num].num]);
-    printMessage(0,num,m, true);
-    sprintf(m,"[%d]", config.pages[currentPage].activeWheels[num].num);
-    printMessage(1,num,m, true);
+    char m[NSIZE + 2];
+    sprintf(m, "[%s]",
+            allWheelNames[config.pages[currentPage].activeWheels[num].num]);
+    slotMessage(0, num, m, true);
+    sprintf(m, "[%d]", config.pages[currentPage].activeWheels[num].num);
+    slotMessage(1, num, m, true);
   } else {
-    printMessage(0,num,"ERROR", true);
+    slotMessage(0, num, "ERROR", true);
   }
 }
 
-void knobCheck( int num ){
+void knobCheck(int num) {
   knobButtons[num].update();
-  if ( knobButtons[num].fell() ) {
+  if (knobButtons[num].fell()) {
     char addr[80];
-    sprintf(addr, "/eos/param/%s/home", config.pages[currentPage].activeWheels[num].name);
+    sprintf(addr, "/eos/param/%s/home",
+            config.pages[currentPage].activeWheels[num].name);
     OSCMessage wheelMsg(addr);
     SLIPSerial.beginPacket();
     wheelMsg.send(SLIPSerial);
@@ -418,7 +407,7 @@ void knobCheck( int num ){
 
 void loop() {
   static String curMsg;
-  static int i;
+  // static int i;
   int size;
   if (kpd.getKeys()) {
     for (int i = 0; i < LIST_MAX; i++) {
@@ -441,7 +430,7 @@ void loop() {
               break;
             case 'c':
               lcd.clear();
-              printMessage(0, 0, "Writing file...", false);
+              slotMessage(0, 0, "Writing file...", false);
               writeDevice();
               lcd.clear();
               selectMode = false;
@@ -487,20 +476,24 @@ void loop() {
       long wheelin = encoders[w]->getValue();
       if (wheelin != wheelPos[w]) {
         forceUpdate = true;
-        config.pages[currentPage].activeWheels[w].num += wheelin > wheelPos[w] ? 1 : -1;
-        if (config.pages[currentPage].activeWheels[w].num < 1) config.pages[currentPage].activeWheels[w].num = 1;
-        if (config.pages[currentPage].activeWheels[w].num > SUPPORTEDWHEELS) config.pages[currentPage].activeWheels[w].num = SUPPORTEDWHEELS;
-        strncpy(config.pages[currentPage].activeWheels[w].name, allWheelNames[config.pages[currentPage].activeWheels[w].num], NSIZE);
+        config.pages[currentPage].activeWheels[w].num +=
+            wheelin > wheelPos[w] ? 1 : -1;
+        if (config.pages[currentPage].activeWheels[w].num < 1)
+          config.pages[currentPage].activeWheels[w].num = 1;
+        if (config.pages[currentPage].activeWheels[w].num > SUPPORTEDWHEELS)
+          config.pages[currentPage].activeWheels[w].num = SUPPORTEDWHEELS;
+        strncpy(config.pages[currentPage].activeWheels[w].name,
+                allWheelNames[config.pages[currentPage].activeWheels[w].num],
+                NSIZE);
         wheelPos[w] = wheelin;
       }
-      
     }
     if (forceUpdate) {
       for (int w = 0; w < NUMWHEELS; w++) {
         printWheelSelect(w);
         forceUpdate = false;
       }
-      lcd.setCursor(0,1);
+      lcd.setCursor(0, 1);
       lcd.print(currentPage);
     }
   } else {
@@ -513,31 +506,31 @@ void loop() {
     //     curMsg[i] = (char)(SLIPSerial.read());
     //     if (curMsg[i] == -1) {
     //       curMsg[i] = 0;
-    //       printMessage(0, 2, "Serial Error", false);
+    //       slotMessage(0, 2, "Serial Error", false);
     //       break;
     //     }
     //     i++;
     //   }
     // }
-    if (size > 0){
+    if (size > 0) {
       // Fill the msg with all of the available bytes
-      while (size--){
+      while (size--) {
         curMsg += (char)(SLIPSerial.read());
       }
     }
     // Check if message is complete and parse.
     if (SLIPSerial.endofPacket()) {
-      //if (parseOSCMessage(curMsg, i)) {
-        //free(curMsg);
-        //curMsg = NULL;
-        //i = 0;
+      // if (parseOSCMessage(curMsg, i)) {
+      // free(curMsg);
+      // curMsg = NULL;
+      // i = 0;
       //}
       parseOSCMessage(curMsg);
       curMsg = String();
     }
     if (forceUpdate) {
-      if(strcmp(currentDevice,"") == 0){
-            displayNoChannel();
+      if (strcmp(currentDevice, "") == 0) {
+        displayNoChannel();
       } else {
         for (int w = 0; w < NUMWHEELS; w++) {
           printWheelName(w);
@@ -547,44 +540,45 @@ void loop() {
         wheelMsg.send(SLIPSerial);
         SLIPSerial.endPacket();
       }
-      
+
       forceUpdate = false;
     }
-    uint32_t curTime = micros();
-    for (int w = 0; w < NUMWHEELS; w++) {
-      knobCheck(w);
-      long wheelin = encoders[w]->getValue();
-      if (wheelin != wheelPos[w]) {
-        
-        wheelEntries[curEntry] = wheelEntry{curTime, wheelPos[w]-wheelin};
-        curEntry++;
-        if(curEntry >= ENCREADS) curEntry = 0;
-        float total = 0;
-        for (int i = 0; i < ENCREADS; i++) {
-          if( wheelEntries[i].readTime > curTime-50000){
-            total += wheelEntries[i].ticks;
-          } else {
-            wheelEntries[i].ticks = 0;
+    if (handshakeComplete) {
+      uint32_t curTime = micros();
+      for (int w = 0; w < NUMWHEELS; w++) {
+        knobCheck(w);
+        long wheelin = encoders[w]->getValue();
+        if (wheelin != wheelPos[w]) {
+          wheelEntries[curEntry] = wheelEntry{curTime, wheelPos[w] - wheelin};
+          curEntry++;
+          if (curEntry >= ENCREADS) curEntry = 0;
+          float total = 0;
+          for (int i = 0; i < ENCREADS; i++) {
+            if (wheelEntries[i].readTime > curTime - 50000) {
+              total += wheelEntries[i].ticks;
+            } else {
+              wheelEntries[i].ticks = 0;
+            }
           }
+          if (config.pages[currentPage].activeWheels[w].name[0] != 0) {
+            char addr[80] = "/eos/wheel/coarse/";
+            String wheelName = config.pages[currentPage].activeWheels[w].name;
+            wheelName.replace("/", "\\");
+            strncat(addr, wheelName.c_str(), wheelName.length() - 18);
+            OSCMessage wheelMsg(addr);
+            wheelMsg.add(total * -1);
+            SLIPSerial.beginPacket();
+            wheelMsg.send(SLIPSerial);
+            SLIPSerial.endPacket();
+          }
+          wheelPos[w] = wheelin;
         }
-        if (config.pages[currentPage].activeWheels[w].name[0] != 0) {
-          char addr[80] = "/eos/wheel/coarse/";
-          String wheelName = config.pages[currentPage].activeWheels[w].name;
-          wheelName.replace("/","\\");
-          strncat(addr, wheelName.c_str(), wheelName.length() - 18);
-          OSCMessage wheelMsg(addr);
-          wheelMsg.add(total*-1);
-          SLIPSerial.beginPacket();
-          wheelMsg.send(SLIPSerial);
-          SLIPSerial.endPacket();
+      }
+      for (int i = 0; i < ENCREADS; i++) {
+        if (wheelEntries[i].readTime < curTime - 50000) {
+          wheelEntries[i].ticks = 0;
         }
-        wheelPos[w] = wheelin;
       }
     }
-    for (int i = 0; i < ENCREADS; i++) {
-          if( wheelEntries[i].readTime < curTime-50000){
-            wheelEntries[i].ticks = 0;
-          }
-        }
   }
 }

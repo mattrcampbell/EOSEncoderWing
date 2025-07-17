@@ -23,8 +23,8 @@ struct Config {
   page pages[NPAGES];
 };
 int getPadding(int size, const char *msg);
-void printMessage(int row, int slot, int msg, boolean center = true);
-void printMessage(int row, int slot, const char *msg, boolean center);
+void printMessage(int row, const char *msg, boolean center);
+void slotMessage(int row, int slot, const char *msg, boolean center);
 int parseOSCMessage(char *msg, int len);
 void printWheelValue(int i, int value);
 void printWheelName(int num);
